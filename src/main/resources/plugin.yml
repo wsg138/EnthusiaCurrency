@@ -1,0 +1,35 @@
+name: EnthusiaCurrency
+main: com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin
+version: 1.0.0
+api-version: '1.20'
+author: Enthusia
+depend: [Vault]
+softdepend: [PlaceholderAPI]
+
+commands:
+  balance:
+    aliases: [bal, money]
+    description: Shows your token balance.
+    usage: /balance [player]
+  deposit:
+    description: Deposits currency items into your bank.
+    usage: /deposit [amount|all]
+  withdraw:
+    description: Withdraws currency into physical items.
+    usage: /withdraw <amount>
+  pay:
+    description: Pays another player.
+    usage: /pay <player> <amount>
+  baltop:
+    description: Shows the top balances.
+    usage: /baltop [page]
+  currency:
+    aliases: [ecurr]
+    description: EnthusiaCurrency admin command.
+    usage: /currency reload
+
+permissions:
+  currency.admin:
+    default: op
+  currency.balance.others:
+    default: op

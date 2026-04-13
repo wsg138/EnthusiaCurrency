@@ -1,0 +1,57 @@
+currency:
+  material: RAW_GOLD
+
+  block-material: RAW_GOLD_BLOCK
+  block-value: 9
+
+  use-name: false
+  name: "&6&lGold"
+
+  use-lore: false
+  lore:
+    - "&7Server currency."
+
+economy:
+  starting-balance: 0.0
+  allow-decimals: false
+
+  currency-name-singular: "Dollar"
+  currency-name-plural: "Dollars"
+  currency-symbol: "$"
+
+baltop:
+  entries-per-page: 10
+  gui:
+    enabled: true
+    title: "&6Top Balances &7(Page %page%)"
+
+messages:
+  prefix: "&8[&6Currency&8] &r"
+
+  no-permission: "&cYou don't have permission to do that."
+  player-only: "&cOnly players can run this command."
+  invalid-amount: "&cPlease enter a valid amount."
+  player-not-found: "&cThat player has never joined before."
+  self-pay: "&cYou can't pay yourself."
+
+  not-enough-funds: "&cYou don't have the funds for that. &7Balance: &a%symbol%%have% %currency%"
+  not-enough-items: "&cYou don't have enough %currency_plural% in item form."
+
+  deposit-success: "&aDeposited &e%symbol%%amount% %currency% &ainto your account."
+  deposit-all-success: "&aDeposited all your %currency_plural% (&e%symbol%%amount%&a)."
+
+  withdraw-success: "&aWithdrew &e%symbol%%amount% %currency% &ainto physical form."
+  inventory-full: "&cYour inventory is full. Please free some space before withdrawing."
+
+  pay-success-sender: "&aYou paid &e%target% &e%symbol%%amount% %currency%&a."
+  pay-success-target: "&aYou received &e%symbol%%amount% %currency% &afrom &e%sender%&a."
+
+  balance-self: "&aYour balance: &e%symbol%%total% %currency_plural% &7(&fbank: &e%symbol%%bank%&7, items: &e%symbol%%items%&7)"
+  balance-other: "&a%target%'s balance: &e%symbol%%total% %currency_plural% &7(&fbank: &e%symbol%%bank%&7, items: &e%symbol%%items%&7)"
+
+  reloaded: "&aEnthusiaCurrency config reloaded."
+
+  baltop-header: "&6&lTop Balances &7(Page %page%)"
+  baltop-entry: "&e#%pos% &f%player% &7- &e%symbol%%amount%"
+
+  baltop-no-data: "&7No balances found."
