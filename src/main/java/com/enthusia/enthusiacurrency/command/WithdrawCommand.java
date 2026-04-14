@@ -10,6 +10,7 @@ import org.bukkit.inventory.ItemStack;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 public class WithdrawCommand implements CommandExecutor, TabCompleter {
 
@@ -55,10 +56,10 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
         int amount = (int) Math.floor(amountDouble);
 
         BalanceStorage storage = plugin.getBalanceStorage();
-        double bank = storage.getBalance(player.getUniqueId());
+        long bank = storage.getBalance(player.getUniqueId());
         if (bank < amount) {
             String msg = plugin.msgNoPrefix("not-enough-funds")
-                    .replace("%have%", String.format("%.0f", bank))
+                    .replace("%have%", String.valueOf(bank))
                     .replace("%symbol%", plugin.getCurrencySymbol())
                     .replace("%currency%", plugin.getCurrencyName(bank));
             player.sendMessage(plugin.getPrefix() + msg);
@@ -108,14 +109,18 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        storage.withdraw(player.getUniqueId(), amount);
+        storage.withdraw(player.getUniqueId(), (long) amount);
+        storage.saveSingle(player.getUniqueId());
 
         if (canUseBlocks && blocks > 0) {
             int remainingBlocks = blocks;
             while (remainingBlocks > 0) {
                 int stackSize = Math.min(remainingBlocks, blockMaxStack);
                 ItemStack stack = new ItemStack(blockMat, stackSize);
-                player.getInventory().addItem(stack);
+                Map<Integer, ItemStack> overflow = player.getInventory().addItem(stack);
+                for (ItemStack dropped : overflow.values()) {
+                    player.getWorld().dropItemNaturally(player.getLocation(), dropped);
+                }
                 remainingBlocks -= stackSize;
             }
         }
@@ -125,7 +130,10 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
             while (remainingItems > 0) {
                 int stackSize = Math.min(remainingItems, itemMaxStack);
                 ItemStack stack = cm.createCurrencyItem(stackSize);
-                player.getInventory().addItem(stack);
+                Map<Integer, ItemStack> overflow = player.getInventory().addItem(stack);
+                for (ItemStack dropped : overflow.values()) {
+                    player.getWorld().dropItemNaturally(player.getLocation(), dropped);
+                }
                 remainingItems -= stackSize;
             }
         }

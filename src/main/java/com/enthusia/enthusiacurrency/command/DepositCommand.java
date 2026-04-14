@@ -32,10 +32,10 @@ public class DepositCommand implements CommandExecutor, TabCompleter {
         boolean allowDecimals = plugin.getConfig().getBoolean("economy.allow-decimals", false);
 
         CurrencyBreakdown breakdown = CurrencyUtils.getCurrencyBreakdown(currencyManager, player);
-        int items = breakdown.items;
-        int blocks = breakdown.blocks;
+        int items = breakdown.items();
+        int blocks = breakdown.blocks();
         int blockValue = currencyManager.getBlockValue();
-        int totalValue = breakdown.totalValue;
+        int totalValue = breakdown.totalValue();
 
         if (args.length == 0 || args[0].equalsIgnoreCase("all")) {
             if (totalValue <= 0) {
@@ -45,8 +45,9 @@ public class DepositCommand implements CommandExecutor, TabCompleter {
                 return true;
             }
 
-            storage.deposit(player.getUniqueId(), totalValue);
             CurrencyUtils.removeAllFromPlayer(currencyManager, player, items, blocks);
+            storage.deposit(player.getUniqueId(), (long) totalValue);
+            storage.saveSingle(player.getUniqueId());
 
             plugin.getBaltopTracker().refreshTop3();
 
@@ -120,8 +121,9 @@ public class DepositCommand implements CommandExecutor, TabCompleter {
             blocksToRemove = requiredBlocks;
         }
 
-        storage.deposit(player.getUniqueId(), amount);
         CurrencyUtils.removeAllFromPlayer(currencyManager, player, itemsToRemove, blocksToRemove);
+        storage.deposit(player.getUniqueId(), (long) amount);
+        storage.saveSingle(player.getUniqueId());
 
         plugin.getBaltopTracker().refreshTop3();
 

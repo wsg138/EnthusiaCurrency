@@ -15,27 +15,74 @@ public class BaltopTracker {
 
     private final EnthusiaCurrencyPlugin plugin;
     private Set<UUID> lastTop3 = new LinkedHashSet<>();
+    private volatile List<Map.Entry<UUID, Double>> cachedEntries = List.of();
+    private int refreshTaskId = -1;
 
     public BaltopTracker(EnthusiaCurrencyPlugin plugin) {
         this.plugin = plugin;
     }
 
     public void initializeSnapshot() {
-        this.lastTop3 = computeTopSet(3);
+        List<Map.Entry<UUID, Double>> entries = BaltopCommand.buildEntries(plugin);
+        cachedEntries = entries;
+        this.lastTop3 = extractTopSet(entries, 3);
     }
 
+    /**
+     * Start periodic leaderboard refresh (every 60s).
+     * Replaces per-transaction rebuilds for performance.
+     */
+    public void startPeriodicRefresh() {
+        long intervalTicks = 60 * 20L; // 60 seconds
+        refreshTaskId = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            List<Map.Entry<UUID, Double>> entries = BaltopCommand.buildEntries(plugin);
+            cachedEntries = entries;
+            checkTop3Changes(entries);
+        }, intervalTicks, intervalTicks).getTaskId();
+    }
+
+    public void stopPeriodicRefresh() {
+        if (refreshTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(refreshTaskId);
+            refreshTaskId = -1;
+        }
+    }
+
+    public List<Map.Entry<UUID, Double>> getCachedEntries() {
+        return cachedEntries;
+    }
+
+    /**
+     * No-op — kept for API compatibility. Refresh now happens on a timer.
+     */
     public void refreshTop3() {
-        if (!Bukkit.isPrimaryThread()) {
-            Bukkit.getScheduler().runTask(plugin, this::refreshTop3);
-            return;
-        }
+        // Intentional no-op. Leaderboard refreshes every 60s via startPeriodicRefresh().
+    }
 
-        List<Map.Entry<UUID, Double>> entries = BaltopCommand.buildEntries(plugin);
-        Set<UUID> currentTop3 = new LinkedHashSet<>();
-
-        for (int i = 0; i < entries.size() && i < 3; i++) {
-            currentTop3.add(entries.get(i).getKey());
+    public boolean isInTop(UUID uuid, int top) {
+        if (top <= 0) return false;
+        List<Map.Entry<UUID, Double>> entries = cachedEntries;
+        int limit = Math.min(top, entries.size());
+        for (int i = 0; i < limit; i++) {
+            if (entries.get(i).getKey().equals(uuid)) {
+                return true;
+            }
         }
+        return false;
+    }
+
+    public int getRank(UUID uuid) {
+        List<Map.Entry<UUID, Double>> entries = cachedEntries;
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i).getKey().equals(uuid)) {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    private void checkTop3Changes(List<Map.Entry<UUID, Double>> entries) {
+        Set<UUID> currentTop3 = extractTopSet(entries, 3);
 
         if (lastTop3.isEmpty()) {
             lastTop3 = currentTop3;
@@ -53,32 +100,7 @@ public class BaltopTracker {
         lastTop3 = currentTop3;
     }
 
-    public boolean isInTop(UUID uuid, int top) {
-        if (top <= 0) {
-            return false;
-        }
-        List<Map.Entry<UUID, Double>> entries = BaltopCommand.buildEntries(plugin);
-        int limit = Math.min(top, entries.size());
-        for (int i = 0; i < limit; i++) {
-            if (entries.get(i).getKey().equals(uuid)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    public int getRank(UUID uuid) {
-        List<Map.Entry<UUID, Double>> entries = BaltopCommand.buildEntries(plugin);
-        for (int i = 0; i < entries.size(); i++) {
-            if (entries.get(i).getKey().equals(uuid)) {
-                return i + 1;
-            }
-        }
-        return -1;
-    }
-
-    private Set<UUID> computeTopSet(int top) {
-        List<Map.Entry<UUID, Double>> entries = BaltopCommand.buildEntries(plugin);
+    private static Set<UUID> extractTopSet(List<Map.Entry<UUID, Double>> entries, int top) {
         Set<UUID> result = new LinkedHashSet<>();
         int limit = Math.min(top, entries.size());
         for (int i = 0; i < limit; i++) {

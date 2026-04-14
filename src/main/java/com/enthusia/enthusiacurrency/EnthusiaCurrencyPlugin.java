@@ -51,6 +51,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
         this.baltopTracker = new BaltopTracker(this);
         this.baltopTracker.initializeSnapshot();
+        this.baltopTracker.startPeriodicRefresh();
 
         this.skinCache = new SkinCache(this);
         this.skinCache.load();
@@ -66,8 +67,11 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (baltopTracker != null) {
+            baltopTracker.stopPeriodicRefresh();
+        }
         if (balanceStorage != null) {
-            balanceStorage.save();
+            balanceStorage.close();
         }
         if (skinCache != null) {
             skinCache.save();
@@ -235,8 +239,8 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
             Object result = apiClass
                     .getMethod("isFloodgatePlayer", java.util.UUID.class)
                     .invoke(api, player.getUniqueId());
-            if (result instanceof Boolean) {
-                return (Boolean) result;
+            if (result instanceof Boolean b) {
+                return b;
             }
         } catch (Throwable ignored) {
         }

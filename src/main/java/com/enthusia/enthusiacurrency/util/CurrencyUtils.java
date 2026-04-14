@@ -16,7 +16,7 @@ public final class CurrencyUtils {
         if (toRemove <= 0) return 0;
 
         CurrencyBreakdown breakdown = getCurrencyBreakdown(currencyManager, player);
-        if (breakdown.totalValue < toRemove) {
+        if (breakdown.totalValue() < toRemove) {
             return 0;
         }
 
@@ -25,14 +25,14 @@ public final class CurrencyUtils {
         int blocksToRemove;
 
         if (blockValue <= 0 || !currencyManager.hasBlockForm()) {
-            if (breakdown.items < toRemove) {
+            if (breakdown.items() < toRemove) {
                 return 0;
             }
             itemsToRemove = toRemove;
             blocksToRemove = 0;
         } else {
-            int itemsAvailable = breakdown.items;
-            int blocksAvailable = breakdown.blocks;
+            int itemsAvailable = breakdown.items();
+            int blocksAvailable = breakdown.blocks();
 
             int minBlocksForExact = Math.max(0, ceilDiv(toRemove - itemsAvailable, blockValue));
             int maxBlocksForExact = Math.min(blocksAvailable, toRemove / blockValue);
@@ -54,15 +54,9 @@ public final class CurrencyUtils {
         return itemsToRemove + (blocksToRemove * blockValue);
     }
 
-    public static final class CurrencyBreakdown {
-        public final int items;
-        public final int blocks;
-        public final int totalValue;
-
-        public CurrencyBreakdown(int items, int blocks, int blockValue) {
-            this.items = items;
-            this.blocks = blocks;
-            this.totalValue = items + blocks * Math.max(blockValue, 0);
+    public record CurrencyBreakdown(int items, int blocks, int totalValue) {
+        public static CurrencyBreakdown fromBlockValue(int items, int blocks, int blockValue) {
+            return new CurrencyBreakdown(items, blocks, items + blocks * Math.max(blockValue, 0));
         }
     }
 
@@ -82,7 +76,7 @@ public final class CurrencyUtils {
         items += ecCounts[0];
         blocks += ecCounts[1];
 
-        return new CurrencyBreakdown(items, blocks, manager.getBlockValue());
+        return CurrencyBreakdown.fromBlockValue(items, blocks, manager.getBlockValue());
     }
 
     private static int[] countInInventory(CurrencyManager manager, Inventory inv) {

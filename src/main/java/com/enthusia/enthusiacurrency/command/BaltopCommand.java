@@ -21,7 +21,6 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.SkullMeta;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class BaltopCommand implements CommandExecutor, TabCompleter {
 
@@ -40,16 +39,20 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
         BalanceStorage storage = plugin.getBalanceStorage();
         CurrencyManager currency = plugin.getCurrencyManager();
 
-        Map<UUID, Double> baseBalances = storage.getAllBalancesSnapshot();
+        Map<UUID, Long> snapshot = storage.getAllBalancesSnapshot();
+        Map<UUID, Double> combined = new HashMap<>();
+        for (Map.Entry<UUID, Long> e : snapshot.entrySet()) {
+            combined.put(e.getKey(), (double) e.getValue());
+        }
 
         for (Player online : Bukkit.getOnlinePlayers()) {
             UUID uuid = online.getUniqueId();
-            double bank = baseBalances.getOrDefault(uuid, storage.getBalance(uuid));
+            double bank = combined.getOrDefault(uuid, (double) storage.getBalance(uuid));
             int items = CurrencyUtils.countCurrencyInPlayer(currency, online);
-            baseBalances.put(uuid, bank + items);
+            combined.put(uuid, bank + items);
         }
 
-        return baseBalances.entrySet().stream()
+        return combined.entrySet().stream()
                 .sorted((a, b) -> {
                     int cmp = Double.compare(b.getValue(), a.getValue());
                     if (cmp != 0) return cmp;
@@ -59,7 +62,7 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
                     String nb = pb.getName() == null ? "" : pb.getName();
                     return na.compareToIgnoreCase(nb);
                 })
-                .collect(Collectors.toList());
+                .toList();
     }
 
     @Override
@@ -73,7 +76,10 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
         }
         if (page <= 0) page = 1;
 
-        List<Map.Entry<UUID, Double>> entries = buildEntries(plugin);
+        List<Map.Entry<UUID, Double>> entries = plugin.getBaltopTracker().getCachedEntries();
+        if (entries.isEmpty()) {
+            entries = buildEntries(plugin);
+        }
 
         if (entries.isEmpty()) {
             sender.sendMessage(plugin.getPrefix() + plugin.msgNoPrefix("baltop-no-data"));
@@ -200,12 +206,12 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
         }
 
         SkullMeta sm = (SkullMeta) self.getItemMeta();
-        double bank = plugin.getBalanceStorage().getBalance(player.getUniqueId());
+        long bank = plugin.getBalanceStorage().getBalance(player.getUniqueId());
         int items = CurrencyUtils.countCurrencyInPlayer(plugin.getCurrencyManager(), player);
-        double total = bank + items;
+        long total = bank + items;
         List<String> lore = new ArrayList<>();
-        lore.add(ChatColor.GRAY + "Total: " + plugin.getCurrencySymbol() + String.format("%.0f", total));
-        lore.add(ChatColor.DARK_GRAY + "Bank: " + plugin.getCurrencySymbol() + String.format("%.0f", bank));
+        lore.add(ChatColor.GRAY + "Total: " + plugin.getCurrencySymbol() + total);
+        lore.add(ChatColor.DARK_GRAY + "Bank: " + plugin.getCurrencySymbol() + bank);
         lore.add(ChatColor.DARK_GRAY + "Items: " + plugin.getCurrencySymbol() + items);
         sm.setLore(lore);
         self.setItemMeta(sm);

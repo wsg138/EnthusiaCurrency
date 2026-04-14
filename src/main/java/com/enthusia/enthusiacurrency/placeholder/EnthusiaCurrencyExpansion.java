@@ -42,21 +42,16 @@ public class EnthusiaCurrencyExpansion extends PlaceholderExpansion {
         BalanceStorage storage = plugin.getBalanceStorage();
         CurrencyManager currency = plugin.getCurrencyManager();
 
-        double bank = storage.getBalance(player.getUniqueId());
+        long bank = storage.getBalance(player.getUniqueId());
         int items = CurrencyUtils.countCurrencyInPlayer(currency, player);
-        double total = bank + items;
+        long total = bank + items;
 
-        switch (params.toLowerCase()) {
-            case "balance":
-                return String.format("%.0f", total);
-            case "bank":
-                return String.format("%.0f", bank);
-            case "items":
-                return String.valueOf(items);
-            case "top3":
-                return plugin.isInBaltopTop(player.getUniqueId(), 3) ? "true" : "false";
-            default:
-                return null;
-        }
+        return switch (params.toLowerCase()) {
+            case "balance" -> String.valueOf(total);
+            case "bank" -> String.valueOf(bank);
+            case "items" -> String.valueOf(items);
+            case "top3" -> plugin.isInBaltopTop(player.getUniqueId(), 3) ? "true" : "false";
+            default -> null;
+        };
     }
 }

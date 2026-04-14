@@ -48,8 +48,8 @@ public class BalanceCommand implements CommandExecutor {
         BalanceStorage storage = plugin.getBalanceStorage();
         CurrencyManager currencyManager = plugin.getCurrencyManager();
 
-        double bank = storage.getBalance(target.getUniqueId());
-        double total = bank;
+        long bank = storage.getBalance(target.getUniqueId());
+        long total = bank;
         int items = 0;
 
         if (target.isOnline()) {
@@ -63,8 +63,8 @@ public class BalanceCommand implements CommandExecutor {
                 : "balance-other";
 
         String raw = plugin.msgNoPrefix(msgKey)
-                .replace("%total%", String.format("%.0f", total))
-                .replace("%bank%", String.format("%.0f", bank))
+                .replace("%total%", String.valueOf(total))
+                .replace("%bank%", String.valueOf(bank))
                 .replace("%items%", String.valueOf(items))
                 .replace("%target%", target.getName() == null ? "Unknown" : target.getName())
                 .replace("%symbol%", plugin.getCurrencySymbol())

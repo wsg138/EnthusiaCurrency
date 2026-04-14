@@ -38,6 +38,13 @@ build/
 ### Mac OS ###
 .DS_Store
 
+### Maven Shade ###
+dependency-reduced-pom.xml
+
 # Local comparison artifacts
 jar_compare/
 src.zip
+
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md

@@ -24,6 +24,7 @@ public class EnthusiaCurrencyCommand implements CommandExecutor {
         plugin.reloadAndSyncConfig();
         plugin.getCurrencyManager().reload();
         plugin.getBalanceStorage().save();
+        plugin.getBaltopTracker().initializeSnapshot();
 
         plugin.sendMsg(sender, "reloaded");
         return true;

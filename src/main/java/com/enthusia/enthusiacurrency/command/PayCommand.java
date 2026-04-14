@@ -73,14 +73,14 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         BalanceStorage storage = plugin.getBalanceStorage();
         CurrencyManager manager = plugin.getCurrencyManager();
 
-        double bankBalance = storage.getBalance(player.getUniqueId());
+        long bankBalance = storage.getBalance(player.getUniqueId());
         CurrencyBreakdown breakdown = CurrencyUtils.getCurrencyBreakdown(manager, player);
-        int itemValue = breakdown.totalValue;
-        double total = bankBalance + itemValue;
+        int itemValue = breakdown.totalValue();
+        long total = bankBalance + itemValue;
 
         if (amount > total) {
             String msg = plugin.msgNoPrefix("not-enough-funds")
-                    .replace("%have%", String.format("%.0f", total))
+                    .replace("%have%", String.valueOf(total))
                     .replace("%symbol%", plugin.getCurrencySymbol())
                     .replace("%currency%", plugin.getCurrencyName(total));
             player.sendMessage(plugin.getPrefix() + msg);
@@ -88,32 +88,35 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         }
 
         int remaining = amount;
+        int totalDeducted = 0;
 
         while (remaining > 0) {
-            double currentBank = storage.getBalance(player.getUniqueId());
+            long currentBank = storage.getBalance(player.getUniqueId());
             if (currentBank > 0) {
                 int use = (int) Math.min(currentBank, remaining);
-                if (use > 0) {
-                    storage.withdraw(player.getUniqueId(), use);
+                if (use > 0 && storage.withdraw(player.getUniqueId(), (long) use)) {
                     remaining -= use;
+                    totalDeducted += use;
                     if (remaining <= 0) break;
                 }
             }
 
             CurrencyBreakdown cb = CurrencyUtils.getCurrencyBreakdown(manager, player);
 
-            if (cb.items > 0 && remaining > 0) {
-                int useItems = Math.min(cb.items, remaining);
+            if (cb.items() > 0 && remaining > 0) {
+                int useItems = Math.min(cb.items(), remaining);
                 CurrencyUtils.removeAllFromPlayer(manager, player, useItems, 0);
                 remaining -= useItems;
+                totalDeducted += useItems;
                 continue;
             }
 
-            if (cb.blocks > 0 && remaining > 0) {
+            if (cb.blocks() > 0 && remaining > 0) {
                 CurrencyUtils.removeAllFromPlayer(manager, player, 0, 1);
                 int blockValue = manager.getBlockValue();
                 if (blockValue > 0) {
-                    storage.deposit(player.getUniqueId(), blockValue);
+                    storage.deposit(player.getUniqueId(), (long) blockValue);
+                    totalDeducted -= blockValue;
                 }
                 continue;
             }
@@ -122,16 +125,23 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         }
 
         if (remaining > 0) {
-            plugin.getLogger().warning("PayCommand: remaining > 0 after deduction. This should not happen.");
+            // Rollback: refund everything taken from sender
+            if (totalDeducted > 0) {
+                storage.deposit(player.getUniqueId(), (long) totalDeducted);
+            }
+            plugin.getLogger().warning("PayCommand: partial deduction rollback for " + player.getName());
+            long currentBal = storage.getBalance(player.getUniqueId());
             String msg = plugin.msgNoPrefix("not-enough-funds")
-                    .replace("%have%", String.format("%.0f", storage.getBalance(player.getUniqueId())))
+                    .replace("%have%", String.valueOf(currentBal))
                     .replace("%symbol%", plugin.getCurrencySymbol())
-                    .replace("%currency%", plugin.getCurrencyName(storage.getBalance(player.getUniqueId())));
+                    .replace("%currency%", plugin.getCurrencyName(currentBal));
             player.sendMessage(plugin.getPrefix() + msg);
             return true;
         }
 
-        storage.deposit(target.getUniqueId(), amount);
+        storage.deposit(target.getUniqueId(), (long) amount);
+        storage.saveSingle(player.getUniqueId());
+        storage.saveSingle(target.getUniqueId());
 
         String senderMsg = plugin.msgNoPrefix("pay-success-sender")
                 .replace("%target%", target.getName() == null ? "Unknown" : target.getName())
