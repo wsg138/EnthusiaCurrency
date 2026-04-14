@@ -1,12 +1,12 @@
 package com.enthusia.enthusiacurrency.command;
 
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
-import com.enthusia.enthusiacurrency.storage.BalanceStorage;
-import com.enthusia.enthusiacurrency.util.CurrencyManager;
-import com.enthusia.enthusiacurrency.util.CurrencyUtils;
+import com.enthusia.enthusiacurrency.service.CurrencyService;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
-import org.bukkit.command.*;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandExecutor;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 public class BalanceCommand implements CommandExecutor {
@@ -19,7 +19,6 @@ public class BalanceCommand implements CommandExecutor {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-
         if (args.length == 0) {
             if (!(sender instanceof Player player)) {
                 plugin.sendMsg(sender, "player-only");
@@ -35,7 +34,7 @@ public class BalanceCommand implements CommandExecutor {
         }
 
         OfflinePlayer target = Bukkit.getOfflinePlayer(args[0]);
-        if (target == null || (!target.hasPlayedBefore() && !target.isOnline())) {
+        if (!target.hasPlayedBefore() && !target.isOnline()) {
             plugin.sendMsg(sender, "player-not-found");
             return true;
         }
@@ -45,31 +44,20 @@ public class BalanceCommand implements CommandExecutor {
     }
 
     private void sendBalance(CommandSender viewer, OfflinePlayer target) {
-        BalanceStorage storage = plugin.getBalanceStorage();
-        CurrencyManager currencyManager = plugin.getCurrencyManager();
+        CurrencyService.BalanceView balanceView = plugin.getCurrencyService().getBalanceView(target);
 
-        double bank = storage.getBalance(target.getUniqueId());
-        double total = bank;
-        int items = 0;
-
-        if (target.isOnline()) {
-            Player p = target.getPlayer();
-            items = CurrencyUtils.countCurrencyInPlayer(currencyManager, p);
-            total += items;
-        }
-
-        String msgKey = (viewer instanceof Player && viewer.getName().equalsIgnoreCase(target.getName()))
+        String messageKey = (viewer instanceof Player player && player.getUniqueId().equals(target.getUniqueId()))
                 ? "balance-self"
                 : "balance-other";
 
-        String raw = plugin.msgNoPrefix(msgKey)
-                .replace("%total%", String.format("%.0f", total))
-                .replace("%bank%", String.format("%.0f", bank))
-                .replace("%items%", String.valueOf(items))
+        String message = plugin.msgNoPrefix(messageKey)
+                .replace("%total%", String.valueOf(balanceView.total()))
+                .replace("%bank%", String.valueOf(balanceView.bank()))
+                .replace("%items%", String.valueOf(balanceView.items()))
                 .replace("%target%", target.getName() == null ? "Unknown" : target.getName())
                 .replace("%symbol%", plugin.getCurrencySymbol())
                 .replace("%currency_plural%", plugin.getCurrencyPlural());
 
-        viewer.sendMessage(plugin.getPrefix() + raw);
+        viewer.sendMessage(plugin.getPrefix() + message);
     }
 }

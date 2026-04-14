@@ -37,6 +37,7 @@ public class CurrencyManager {
         }
 
         String blockMatName = config.getString("currency.block-material", "");
+        this.blockMaterial = null;
         if (blockMatName != null && !blockMatName.isEmpty()) {
             this.blockMaterial = Material.matchMaterial(blockMatName);
             if (this.blockMaterial == null) {

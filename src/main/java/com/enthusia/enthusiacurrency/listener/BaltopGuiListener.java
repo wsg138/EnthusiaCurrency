@@ -63,7 +63,7 @@ public class BaltopGuiListener implements Listener {
         int newPage = currentPage + delta;
         if (newPage < 1) newPage = 1;
 
-        List<Map.Entry<UUID, Double>> entries = BaltopCommand.buildEntries(plugin);
+        List<Map.Entry<UUID, Long>> entries = plugin.getBaltopTracker().getEntriesForDisplay();
         if (entries.isEmpty()) {
             player.closeInventory();
             return;

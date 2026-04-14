@@ -1,15 +1,17 @@
 package com.enthusia.enthusiacurrency.command;
 
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
-import com.enthusia.enthusiacurrency.storage.BalanceStorage;
-import com.enthusia.enthusiacurrency.util.CurrencyManager;
-import com.enthusia.enthusiacurrency.util.CurrencyUtils;
-import com.enthusia.enthusiacurrency.util.CurrencyUtils.CurrencyBreakdown;
-import org.bukkit.command.*;
+import com.enthusia.enthusiacurrency.service.CurrencyAmountParser;
+import com.enthusia.enthusiacurrency.service.CurrencyService;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandExecutor;
+import org.bukkit.command.CommandSender;
+import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.OptionalLong;
 
 public class DepositCommand implements CommandExecutor, TabCompleter {
 
@@ -21,116 +23,51 @@ public class DepositCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-
         if (!(sender instanceof Player player)) {
             plugin.sendMsg(sender, "player-only");
             return true;
         }
 
-        CurrencyManager currencyManager = plugin.getCurrencyManager();
-        BalanceStorage storage = plugin.getBalanceStorage();
-        boolean allowDecimals = plugin.getConfig().getBoolean("economy.allow-decimals", false);
-
-        CurrencyBreakdown breakdown = CurrencyUtils.getCurrencyBreakdown(currencyManager, player);
-        int items = breakdown.items;
-        int blocks = breakdown.blocks;
-        int blockValue = currencyManager.getBlockValue();
-        int totalValue = breakdown.totalValue;
+        CurrencyService currencyService = plugin.getCurrencyService();
 
         if (args.length == 0 || args[0].equalsIgnoreCase("all")) {
-            if (totalValue <= 0) {
-                String msg = plugin.msgNoPrefix("not-enough-items")
+            CurrencyService.DepositResult result = currencyService.depositAll(player);
+            if (!result.success()) {
+                String message = plugin.msgNoPrefix("not-enough-items")
                         .replace("%currency_plural%", plugin.getCurrencyPlural());
-                player.sendMessage(plugin.getPrefix() + msg);
+                player.sendMessage(plugin.getPrefix() + message);
                 return true;
             }
 
-            storage.deposit(player.getUniqueId(), totalValue);
-            CurrencyUtils.removeAllFromPlayer(currencyManager, player, items, blocks);
-
-            plugin.getBaltopTracker().refreshTop3();
-
-            String msg = plugin.msgNoPrefix("deposit-all-success")
-                    .replace("%amount%", String.valueOf(totalValue))
+            String message = plugin.msgNoPrefix("deposit-all-success")
+                    .replace("%amount%", String.valueOf(result.depositedAmount()))
                     .replace("%symbol%", plugin.getCurrencySymbol())
                     .replace("%currency_plural%", plugin.getCurrencyPlural())
-                    .replace("%currency%", plugin.getCurrencyName(totalValue));
-            player.sendMessage(plugin.getPrefix() + msg);
+                    .replace("%currency%", plugin.getCurrencyName(result.depositedAmount()));
+            player.sendMessage(plugin.getPrefix() + message);
             return true;
         }
 
-        double amountDouble;
-        try {
-            amountDouble = Double.parseDouble(args[0]);
-        } catch (NumberFormatException e) {
+        boolean allowDecimals = plugin.getConfig().getBoolean("economy.allow-decimals", false);
+        OptionalLong parsedAmount = CurrencyAmountParser.parseUserAmount(args[0], allowDecimals);
+        if (parsedAmount.isEmpty()) {
             plugin.sendMsg(player, "invalid-amount");
             return true;
         }
 
-        if (amountDouble <= 0) {
-            plugin.sendMsg(player, "invalid-amount");
-            return true;
-        }
-
-        if (!allowDecimals && amountDouble != Math.floor(amountDouble)) {
-            plugin.sendMsg(player, "invalid-amount");
-            return true;
-        }
-
-        int amount = (int) Math.floor(amountDouble);
-
-        if (amount > totalValue) {
-            String msg = plugin.msgNoPrefix("not-enough-items")
+        CurrencyService.DepositResult result = currencyService.deposit(player, parsedAmount.getAsLong());
+        if (!result.success()) {
+            String message = plugin.msgNoPrefix("not-enough-items")
                     .replace("%currency_plural%", plugin.getCurrencyPlural());
-            player.sendMessage(plugin.getPrefix() + msg);
+            player.sendMessage(plugin.getPrefix() + message);
             return true;
         }
 
-        int itemsToRemove;
-        int blocksToRemove;
-
-        if (amount <= items) {
-            itemsToRemove = amount;
-            blocksToRemove = 0;
-        } else {
-            if (blockValue <= 0) {
-                String msg = plugin.msgNoPrefix("not-enough-items")
-                        .replace("%currency_plural%", plugin.getCurrencyPlural());
-                player.sendMessage(plugin.getPrefix() + msg);
-                return true;
-            }
-
-            int needFromBlocks = amount - items;
-            if (needFromBlocks % blockValue != 0) {
-                String msg = plugin.msgNoPrefix("not-enough-items")
-                        .replace("%currency_plural%", plugin.getCurrencyPlural());
-                player.sendMessage(plugin.getPrefix() + msg);
-                return true;
-            }
-
-            int requiredBlocks = needFromBlocks / blockValue;
-            if (requiredBlocks > blocks) {
-                String msg = plugin.msgNoPrefix("not-enough-items")
-                        .replace("%currency_plural%", plugin.getCurrencyPlural());
-                player.sendMessage(plugin.getPrefix() + msg);
-                return true;
-            }
-
-            itemsToRemove = items;
-            blocksToRemove = requiredBlocks;
-        }
-
-        storage.deposit(player.getUniqueId(), amount);
-        CurrencyUtils.removeAllFromPlayer(currencyManager, player, itemsToRemove, blocksToRemove);
-
-        plugin.getBaltopTracker().refreshTop3();
-
-        String msg = plugin.msgNoPrefix("deposit-success")
-                .replace("%amount%", String.valueOf(amount))
+        String message = plugin.msgNoPrefix("deposit-success")
+                .replace("%amount%", String.valueOf(result.depositedAmount()))
                 .replace("%symbol%", plugin.getCurrencySymbol())
-                .replace("%currency%", plugin.getCurrencyName(amount));
-        player.sendMessage(plugin.getPrefix() + msg);
-
+                .replace("%currency%", plugin.getCurrencyName(result.depositedAmount()));
+        player.sendMessage(plugin.getPrefix() + message);
         return true;
     }
 

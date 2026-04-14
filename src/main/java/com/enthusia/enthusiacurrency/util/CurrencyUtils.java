@@ -16,7 +16,7 @@ public final class CurrencyUtils {
         if (toRemove <= 0) return 0;
 
         CurrencyBreakdown breakdown = getCurrencyBreakdown(currencyManager, player);
-        if (breakdown.totalValue < toRemove) {
+        if (breakdown.totalValue() < toRemove) {
             return 0;
         }
 
@@ -25,14 +25,14 @@ public final class CurrencyUtils {
         int blocksToRemove;
 
         if (blockValue <= 0 || !currencyManager.hasBlockForm()) {
-            if (breakdown.items < toRemove) {
+            if (breakdown.items() < toRemove) {
                 return 0;
             }
             itemsToRemove = toRemove;
             blocksToRemove = 0;
         } else {
-            int itemsAvailable = breakdown.items;
-            int blocksAvailable = breakdown.blocks;
+            int itemsAvailable = Math.toIntExact(breakdown.items());
+            int blocksAvailable = Math.toIntExact(breakdown.blocks());
 
             int minBlocksForExact = Math.max(0, ceilDiv(toRemove - itemsAvailable, blockValue));
             int maxBlocksForExact = Math.min(blocksAvailable, toRemove / blockValue);
@@ -54,40 +54,34 @@ public final class CurrencyUtils {
         return itemsToRemove + (blocksToRemove * blockValue);
     }
 
-    public static final class CurrencyBreakdown {
-        public final int items;
-        public final int blocks;
-        public final int totalValue;
-
-        public CurrencyBreakdown(int items, int blocks, int blockValue) {
-            this.items = items;
-            this.blocks = blocks;
-            this.totalValue = items + blocks * Math.max(blockValue, 0);
+    public record CurrencyBreakdown(long items, long blocks, long totalValue) {
+        public static CurrencyBreakdown of(long items, long blocks, int blockValue) {
+            return new CurrencyBreakdown(items, blocks, items + blocks * Math.max(blockValue, 0));
         }
     }
 
-    public static int countCurrencyInPlayer(CurrencyManager manager, Player player) {
-        return getCurrencyBreakdown(manager, player).totalValue;
+    public static long countCurrencyInPlayer(CurrencyManager manager, Player player) {
+        return getCurrencyBreakdown(manager, player).totalValue();
     }
 
     public static CurrencyBreakdown getCurrencyBreakdown(CurrencyManager manager, Player player) {
-        int items = 0;
-        int blocks = 0;
+        long items = 0;
+        long blocks = 0;
 
-        int[] invCounts = countInInventory(manager, player.getInventory());
+        long[] invCounts = countInInventory(manager, player.getInventory());
         items += invCounts[0];
         blocks += invCounts[1];
 
-        int[] ecCounts = countInInventory(manager, player.getEnderChest());
+        long[] ecCounts = countInInventory(manager, player.getEnderChest());
         items += ecCounts[0];
         blocks += ecCounts[1];
 
-        return new CurrencyBreakdown(items, blocks, manager.getBlockValue());
+        return CurrencyBreakdown.of(items, blocks, manager.getBlockValue());
     }
 
-    private static int[] countInInventory(CurrencyManager manager, Inventory inv) {
-        int items = 0;
-        int blocks = 0;
+    private static long[] countInInventory(CurrencyManager manager, Inventory inv) {
+        long items = 0;
+        long blocks = 0;
 
         for (int i = 0; i < inv.getSize(); i++) {
             ItemStack stack = inv.getItem(i);
@@ -105,14 +99,14 @@ public final class CurrencyUtils {
 
             if (stack.getItemMeta() instanceof BlockStateMeta meta) {
                 if (meta.getBlockState() instanceof ShulkerBox box) {
-                    int[] inner = countInInventory(manager, box.getInventory());
+                    long[] inner = countInInventory(manager, box.getInventory());
                     items += inner[0];
                     blocks += inner[1];
                 }
             }
         }
 
-        return new int[]{items, blocks};
+        return new long[]{items, blocks};
     }
 
     public static void removeCurrencyFromPlayerByCounts(CurrencyManager manager,

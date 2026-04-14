@@ -15,16 +15,14 @@ public class EnthusiaCurrencyCommand implements CommandExecutor {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-
         if (!sender.hasPermission("currency.admin")) {
             plugin.sendMsg(sender, "no-permission");
             return true;
         }
 
+        plugin.getBalanceStorage().save();
         plugin.reloadAndSyncConfig();
         plugin.getCurrencyManager().reload();
-        plugin.getBalanceStorage().save();
-
         plugin.sendMsg(sender, "reloaded");
         return true;
     }

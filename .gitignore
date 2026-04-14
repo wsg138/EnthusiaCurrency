@@ -29,6 +29,7 @@ target/
 /nbdist/
 /.nb-gradle/
 build/
+dependency-reduced-pom.xml
 !**/src/main/**/build/
 !**/src/test/**/build/
 

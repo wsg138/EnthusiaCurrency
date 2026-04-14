@@ -14,53 +14,57 @@ import java.util.UUID;
 public class BaltopTracker {
 
     private final EnthusiaCurrencyPlugin plugin;
+
     private Set<UUID> lastTop3 = new LinkedHashSet<>();
+    private volatile List<Map.Entry<UUID, Long>> cachedEntries = List.of();
+    private volatile boolean dirty = true;
+    private int refreshTaskId = -1;
 
     public BaltopTracker(EnthusiaCurrencyPlugin plugin) {
         this.plugin = plugin;
     }
 
     public void initializeSnapshot() {
-        this.lastTop3 = computeTopSet(3);
+        refreshNow();
+    }
+
+    public void start() {
+        long intervalSeconds = Math.max(5L, plugin.getConfig().getLong("baltop.refresh-interval-seconds", 15L));
+        long intervalTicks = intervalSeconds * 20L;
+        refreshTaskId = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            if (dirty) {
+                refreshNow();
+            }
+        }, intervalTicks, intervalTicks).getTaskId();
+    }
+
+    public void stop() {
+        if (refreshTaskId != -1) {
+            Bukkit.getScheduler().cancelTask(refreshTaskId);
+            refreshTaskId = -1;
+        }
     }
 
     public void refreshTop3() {
-        if (!Bukkit.isPrimaryThread()) {
-            Bukkit.getScheduler().runTask(plugin, this::refreshTop3);
-            return;
+        dirty = true;
+    }
+
+    public List<Map.Entry<UUID, Long>> getEntriesForDisplay() {
+        if (dirty && Bukkit.isPrimaryThread()) {
+            refreshNow();
         }
-
-        List<Map.Entry<UUID, Double>> entries = BaltopCommand.buildEntries(plugin);
-        Set<UUID> currentTop3 = new LinkedHashSet<>();
-
-        for (int i = 0; i < entries.size() && i < 3; i++) {
-            currentTop3.add(entries.get(i).getKey());
-        }
-
-        if (lastTop3.isEmpty()) {
-            lastTop3 = currentTop3;
-            return;
-        }
-
-        for (int i = 0; i < entries.size() && i < 3; i++) {
-            UUID uuid = entries.get(i).getKey();
-            if (!lastTop3.contains(uuid)) {
-                double balance = entries.get(i).getValue();
-                Bukkit.getPluginManager().callEvent(new BaltopTopEnterEvent(uuid, i + 1, balance));
-            }
-        }
-
-        lastTop3 = currentTop3;
+        return cachedEntries;
     }
 
     public boolean isInTop(UUID uuid, int top) {
         if (top <= 0) {
             return false;
         }
-        List<Map.Entry<UUID, Double>> entries = BaltopCommand.buildEntries(plugin);
+
+        List<Map.Entry<UUID, Long>> entries = getEntriesForDisplay();
         int limit = Math.min(top, entries.size());
-        for (int i = 0; i < limit; i++) {
-            if (entries.get(i).getKey().equals(uuid)) {
+        for (int index = 0; index < limit; index++) {
+            if (entries.get(index).getKey().equals(uuid)) {
                 return true;
             }
         }
@@ -68,22 +72,45 @@ public class BaltopTracker {
     }
 
     public int getRank(UUID uuid) {
-        List<Map.Entry<UUID, Double>> entries = BaltopCommand.buildEntries(plugin);
-        for (int i = 0; i < entries.size(); i++) {
-            if (entries.get(i).getKey().equals(uuid)) {
-                return i + 1;
+        List<Map.Entry<UUID, Long>> entries = getEntriesForDisplay();
+        for (int index = 0; index < entries.size(); index++) {
+            if (entries.get(index).getKey().equals(uuid)) {
+                return index + 1;
             }
         }
         return -1;
     }
 
-    private Set<UUID> computeTopSet(int top) {
-        List<Map.Entry<UUID, Double>> entries = BaltopCommand.buildEntries(plugin);
-        Set<UUID> result = new LinkedHashSet<>();
-        int limit = Math.min(top, entries.size());
-        for (int i = 0; i < limit; i++) {
-            result.add(entries.get(i).getKey());
+    private void refreshNow() {
+        List<Map.Entry<UUID, Long>> entries = BaltopCommand.buildEntries(plugin);
+        cachedEntries = entries;
+        dirty = false;
+        checkTop3Changes(entries);
+    }
+
+    private void checkTop3Changes(List<Map.Entry<UUID, Long>> entries) {
+        Set<UUID> currentTop3 = extractTopSet(entries, 3);
+        if (lastTop3.isEmpty()) {
+            lastTop3 = currentTop3;
+            return;
         }
-        return result;
+
+        for (int index = 0; index < entries.size() && index < 3; index++) {
+            UUID uuid = entries.get(index).getKey();
+            if (!lastTop3.contains(uuid)) {
+                Bukkit.getPluginManager().callEvent(new BaltopTopEnterEvent(uuid, index + 1, entries.get(index).getValue()));
+            }
+        }
+
+        lastTop3 = currentTop3;
+    }
+
+    private Set<UUID> extractTopSet(List<Map.Entry<UUID, Long>> entries, int top) {
+        Set<UUID> topSet = new LinkedHashSet<>();
+        int limit = Math.min(top, entries.size());
+        for (int index = 0; index < limit; index++) {
+            topSet.add(entries.get(index).getKey());
+        }
+        return topSet;
     }
 }

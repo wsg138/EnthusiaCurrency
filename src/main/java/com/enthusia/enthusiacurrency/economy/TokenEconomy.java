@@ -1,9 +1,10 @@
 package com.enthusia.enthusiacurrency.economy;
 
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
+import com.enthusia.enthusiacurrency.service.CurrencyAmountParser;
+import com.enthusia.enthusiacurrency.service.CurrencyService;
 import com.enthusia.enthusiacurrency.storage.BalanceStorage;
 import com.enthusia.enthusiacurrency.util.CurrencyManager;
-import com.enthusia.enthusiacurrency.util.CurrencyUtils;
 import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
 import org.bukkit.Bukkit;
@@ -11,6 +12,8 @@ import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 
 import java.util.List;
+import java.util.OptionalLong;
+import java.util.concurrent.Callable;
 
 public class TokenEconomy implements Economy {
 
@@ -41,12 +44,13 @@ public class TokenEconomy implements Economy {
 
     @Override
     public int fractionalDigits() {
-        return 2;
+        return 0;
     }
 
     @Override
     public String format(double amount) {
-        return plugin.getCurrencySymbol() + String.format("%.0f", amount);
+        long normalized = normalizeAmount(amount).orElse(0L);
+        return plugin.getCurrencySymbol() + normalized;
     }
 
     @Override
@@ -59,7 +63,6 @@ public class TokenEconomy implements Economy {
         return plugin.getCurrencySingular();
     }
 
-
     @Override
     public boolean hasAccount(OfflinePlayer player) {
         return true;
@@ -67,8 +70,7 @@ public class TokenEconomy implements Economy {
 
     @Override
     public boolean hasAccount(String playerName) {
-        OfflinePlayer player = Bukkit.getOfflinePlayer(playerName);
-        return player != null;
+        return true;
     }
 
     @Override
@@ -83,15 +85,10 @@ public class TokenEconomy implements Economy {
 
     @Override
     public double getBalance(OfflinePlayer offlinePlayer) {
-        Player player = offlinePlayer.getPlayer();
-        double bank = storage.getBalance(offlinePlayer.getUniqueId());
-
-        if (player != null && player.isOnline()) {
-            int items = CurrencyUtils.countCurrencyInPlayer(currencyManager, player);
-            return bank + items;
-        }
-
-        return bank;
+        return runSyncIfNeeded(() -> {
+            CurrencyService.BalanceView balanceView = plugin.getCurrencyService().getBalanceView(offlinePlayer);
+            return (double) balanceView.total();
+        });
     }
 
     @Override
@@ -131,57 +128,23 @@ public class TokenEconomy implements Economy {
 
     @Override
     public EconomyResponse withdrawPlayer(OfflinePlayer offlinePlayer, double amount) {
-        if (amount < 0) {
-            return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, "Negative amount.");
+        OptionalLong normalized = normalizeAmount(amount);
+        if (normalized.isEmpty()) {
+            return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, "Invalid amount.");
         }
 
-        Player player = offlinePlayer.getPlayer();
-
-        if (player != null && player.isOnline()) {
-            double bank = storage.getBalance(offlinePlayer.getUniqueId());
-            int items = CurrencyUtils.countCurrencyInPlayer(currencyManager, player);
-            double total = bank + items;
-
-            if (total < amount) {
-                return new EconomyResponse(0, total, EconomyResponse.ResponseType.FAILURE, "Not enough funds.");
+        return runSyncIfNeeded(() -> {
+            CurrencyService.VaultWithdrawResult result = plugin.getCurrencyService().withdrawTotal(offlinePlayer, normalized.getAsLong());
+            if (!result.success()) {
+                String message = "insufficient".equals(result.failureReason())
+                        ? "Not enough funds."
+                        : "Invalid amount.";
+                return new EconomyResponse(0, result.newBalance(), EconomyResponse.ResponseType.FAILURE, message);
             }
 
-            double remaining = amount;
-
-            if (bank >= remaining) {
-                storage.withdraw(offlinePlayer.getUniqueId(), remaining);
-                remaining = 0;
-            } else {
-                remaining -= bank;
-                storage.setBalance(offlinePlayer.getUniqueId(), 0);
-            }
-
-            if (remaining > 0) {
-                int toRemove = (int) Math.ceil(remaining);
-                int removed = CurrencyUtils.removeCurrencyFromPlayer(currencyManager, player, toRemove);
-                if (removed < toRemove) {
-                    return new EconomyResponse(amount - remaining, getBalance(offlinePlayer),
-                            EconomyResponse.ResponseType.FAILURE, "Could not remove enough tokens from items.");
-                }
-                if (removed > toRemove) {
-                    storage.deposit(offlinePlayer.getUniqueId(), removed - toRemove);
-                }
-                remaining = 0;
-            }
-
-            plugin.getBaltopTracker().refreshTop3();
-            return new EconomyResponse(amount, getBalance(offlinePlayer),
-                    EconomyResponse.ResponseType.SUCCESS, null);
-        } else {
-            boolean success = storage.withdraw(offlinePlayer.getUniqueId(), amount);
-            if (!success) {
-                return new EconomyResponse(0, getBalance(offlinePlayer),
-                        EconomyResponse.ResponseType.FAILURE, "Not enough bank funds (offline).");
-            }
-            plugin.getBaltopTracker().refreshTop3();
-            return new EconomyResponse(amount, getBalance(offlinePlayer),
-                    EconomyResponse.ResponseType.SUCCESS, null);
-        }
+            plugin.getCurrencyService().markLeaderboardDirty();
+            return new EconomyResponse(amount, result.newBalance(), EconomyResponse.ResponseType.SUCCESS, null);
+        });
     }
 
     @Override
@@ -201,13 +164,17 @@ public class TokenEconomy implements Economy {
 
     @Override
     public EconomyResponse depositPlayer(OfflinePlayer offlinePlayer, double amount) {
-        if (amount < 0) {
-            return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, "Negative amount.");
+        OptionalLong normalized = normalizeAmount(amount);
+        if (normalized.isEmpty()) {
+            return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, "Invalid amount.");
         }
-        storage.deposit(offlinePlayer.getUniqueId(), amount);
-        plugin.getBaltopTracker().refreshTop3();
-        return new EconomyResponse(amount, getBalance(offlinePlayer),
-                EconomyResponse.ResponseType.SUCCESS, null);
+
+        try {
+            long newBalance = plugin.getCurrencyService().depositBank(offlinePlayer.getUniqueId(), normalized.getAsLong());
+            return new EconomyResponse(amount, newBalance, EconomyResponse.ResponseType.SUCCESS, null);
+        } catch (IllegalArgumentException ex) {
+            return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, "Invalid amount.");
+        }
     }
 
     @Override
@@ -227,57 +194,57 @@ public class TokenEconomy implements Economy {
 
     @Override
     public EconomyResponse createBank(String name, String player) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+        return notImplemented();
     }
 
     @Override
     public EconomyResponse createBank(String name, OfflinePlayer player) {
-        return createBank(name, player.getName());
+        return notImplemented();
     }
 
     @Override
     public EconomyResponse deleteBank(String name) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+        return notImplemented();
     }
 
     @Override
     public EconomyResponse bankBalance(String name) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+        return notImplemented();
     }
 
     @Override
     public EconomyResponse bankHas(String name, double amount) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+        return notImplemented();
     }
 
     @Override
     public EconomyResponse bankWithdraw(String name, double amount) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+        return notImplemented();
     }
 
     @Override
     public EconomyResponse bankDeposit(String name, double amount) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+        return notImplemented();
     }
 
     @Override
     public EconomyResponse isBankOwner(String name, String playerName) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+        return notImplemented();
     }
 
     @Override
     public EconomyResponse isBankOwner(String name, OfflinePlayer player) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+        return notImplemented();
     }
 
     @Override
     public EconomyResponse isBankMember(String name, String playerName) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+        return notImplemented();
     }
 
     @Override
     public EconomyResponse isBankMember(String name, OfflinePlayer player) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+        return notImplemented();
     }
 
     @Override
@@ -287,13 +254,12 @@ public class TokenEconomy implements Economy {
 
     @Override
     public boolean createPlayerAccount(String playerName) {
-        OfflinePlayer player = Bukkit.getOfflinePlayer(playerName);
-        return createPlayerAccount(player);
+        return createPlayerAccount(Bukkit.getOfflinePlayer(playerName));
     }
 
     @Override
     public boolean createPlayerAccount(OfflinePlayer player) {
-        storage.getBalance(player.getUniqueId());
+        storage.ensureAccount(player.getUniqueId());
         return true;
     }
 
@@ -305,5 +271,29 @@ public class TokenEconomy implements Economy {
     @Override
     public boolean createPlayerAccount(OfflinePlayer player, String worldName) {
         return createPlayerAccount(player);
+    }
+
+    private OptionalLong normalizeAmount(double amount) {
+        return CurrencyAmountParser.parseUserAmount(Double.toString(amount), true);
+    }
+
+    private EconomyResponse notImplemented() {
+        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+    }
+
+    private <T> T runSyncIfNeeded(Callable<T> callable) {
+        if (Bukkit.isPrimaryThread()) {
+            try {
+                return callable.call();
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        }
+
+        try {
+            return Bukkit.getScheduler().callSyncMethod(plugin, callable).get();
+        } catch (Exception ex) {
+            throw new RuntimeException(ex);
+        }
     }
 }

@@ -5,6 +5,7 @@ import com.enthusia.enthusiacurrency.baltop.BaltopTracker;
 import com.enthusia.enthusiacurrency.economy.TokenEconomy;
 import com.enthusia.enthusiacurrency.listener.BaltopGuiListener;
 import com.enthusia.enthusiacurrency.placeholder.EnthusiaCurrencyExpansion;
+import com.enthusia.enthusiacurrency.service.CurrencyService;
 import com.enthusia.enthusiacurrency.skin.SkinCache;
 import com.enthusia.enthusiacurrency.skin.SkinListener;
 import com.enthusia.enthusiacurrency.storage.BalanceStorage;
@@ -32,6 +33,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     private BalanceStorage balanceStorage;
     private CurrencyManager currencyManager;
+    private CurrencyService currencyService;
     private TokenEconomy tokenEconomy;
     private BaltopTracker baltopTracker;
 
@@ -47,10 +49,19 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         this.currencyManager.reload();
 
         this.balanceStorage = new BalanceStorage(this);
-        this.balanceStorage.load();
+        try {
+            this.balanceStorage.load();
+        } catch (IllegalStateException ex) {
+            getLogger().severe("Failed to start balance storage: " + ex.getMessage());
+            ex.printStackTrace();
+            Bukkit.getPluginManager().disablePlugin(this);
+            return;
+        }
+        this.currencyService = new CurrencyService(this, balanceStorage, currencyManager);
 
         this.baltopTracker = new BaltopTracker(this);
         this.baltopTracker.initializeSnapshot();
+        this.baltopTracker.start();
 
         this.skinCache = new SkinCache(this);
         this.skinCache.load();
@@ -66,8 +77,11 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (baltopTracker != null) {
+            baltopTracker.stop();
+        }
         if (balanceStorage != null) {
-            balanceStorage.save();
+            balanceStorage.close();
         }
         if (skinCache != null) {
             skinCache.save();
@@ -141,6 +155,14 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     public void reloadAndSyncConfig() {
         syncConfigWithDefaults();
+        if (balanceStorage != null) {
+            balanceStorage.reloadSettings();
+        }
+        if (baltopTracker != null) {
+            baltopTracker.refreshTop3();
+            baltopTracker.stop();
+            baltopTracker.start();
+        }
     }
 
     private void syncConfigWithDefaults() {
@@ -199,6 +221,10 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     public BalanceStorage getBalanceStorage() {
         return balanceStorage;
+    }
+
+    public CurrencyService getCurrencyService() {
+        return currencyService;
     }
 
     public CurrencyManager getCurrencyManager() {
@@ -263,6 +289,10 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     public String getCurrencyPlural() {
         return getConfig().getString("economy.currency-name-plural", "Dollars");
+    }
+
+    public String getCurrencyName(long amount) {
+        return amount == 1L ? getCurrencySingular() : getCurrencyPlural();
     }
 
     public String getCurrencyName(double amount) {

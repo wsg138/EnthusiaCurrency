@@ -2,10 +2,8 @@ package com.enthusia.enthusiacurrency.command;
 
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
 import com.enthusia.enthusiacurrency.gui.BaltopHolder;
+import com.enthusia.enthusiacurrency.service.CurrencyService;
 import com.enthusia.enthusiacurrency.skin.SkinCache;
-import com.enthusia.enthusiacurrency.storage.BalanceStorage;
-import com.enthusia.enthusiacurrency.util.CurrencyManager;
-import com.enthusia.enthusiacurrency.util.CurrencyUtils;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
@@ -20,140 +18,127 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.SkullMeta;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 public class BaltopCommand implements CommandExecutor, TabCompleter {
-
-    private final EnthusiaCurrencyPlugin plugin;
 
     public static final int PLAYERS_PER_PAGE = 45;
     public static final int PREV_SLOT = 45;
     public static final int SELF_SLOT = 49;
     public static final int NEXT_SLOT = 53;
 
+    private final EnthusiaCurrencyPlugin plugin;
+
     public BaltopCommand(EnthusiaCurrencyPlugin plugin) {
         this.plugin = plugin;
     }
 
-    public static List<Map.Entry<UUID, Double>> buildEntries(EnthusiaCurrencyPlugin plugin) {
-        BalanceStorage storage = plugin.getBalanceStorage();
-        CurrencyManager currency = plugin.getCurrencyManager();
-
-        Map<UUID, Double> baseBalances = storage.getAllBalancesSnapshot();
+    public static List<Map.Entry<UUID, Long>> buildEntries(EnthusiaCurrencyPlugin plugin) {
+        CurrencyService currencyService = plugin.getCurrencyService();
+        Map<UUID, Long> totals = new HashMap<>(currencyService.getBankSnapshot());
 
         for (Player online : Bukkit.getOnlinePlayers()) {
-            UUID uuid = online.getUniqueId();
-            double bank = baseBalances.getOrDefault(uuid, storage.getBalance(uuid));
-            int items = CurrencyUtils.countCurrencyInPlayer(currency, online);
-            baseBalances.put(uuid, bank + items);
+            CurrencyService.BalanceView balanceView = currencyService.getBalanceView(online);
+            totals.put(online.getUniqueId(), balanceView.total());
         }
 
-        return baseBalances.entrySet().stream()
-                .sorted((a, b) -> {
-                    int cmp = Double.compare(b.getValue(), a.getValue());
-                    if (cmp != 0) return cmp;
-                    OfflinePlayer pa = Bukkit.getOfflinePlayer(a.getKey());
-                    OfflinePlayer pb = Bukkit.getOfflinePlayer(b.getKey());
-                    String na = pa.getName() == null ? "" : pa.getName();
-                    String nb = pb.getName() == null ? "" : pb.getName();
-                    return na.compareToIgnoreCase(nb);
-                })
-                .collect(Collectors.toList());
+        List<Map.Entry<UUID, Long>> entries = new ArrayList<>(totals.entrySet());
+        entries.sort((left, right) -> {
+            int amountCompare = Long.compare(right.getValue(), left.getValue());
+            if (amountCompare != 0) {
+                return amountCompare;
+            }
+
+            OfflinePlayer leftPlayer = Bukkit.getOfflinePlayer(left.getKey());
+            OfflinePlayer rightPlayer = Bukkit.getOfflinePlayer(right.getKey());
+            String leftName = leftPlayer.getName() == null ? "" : leftPlayer.getName();
+            String rightName = rightPlayer.getName() == null ? "" : rightPlayer.getName();
+            return leftName.compareToIgnoreCase(rightName);
+        });
+        return entries;
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-
         int page = 1;
         if (args.length >= 1) {
             try {
                 page = Integer.parseInt(args[0]);
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) {
+            }
         }
-        if (page <= 0) page = 1;
+        if (page <= 0) {
+            page = 1;
+        }
 
-        List<Map.Entry<UUID, Double>> entries = buildEntries(plugin);
-
+        List<Map.Entry<UUID, Long>> entries = plugin.getBaltopTracker().getEntriesForDisplay();
         if (entries.isEmpty()) {
             sender.sendMessage(plugin.getPrefix() + plugin.msgNoPrefix("baltop-no-data"));
             return true;
         }
 
         int perPageChat = plugin.getConfig().getInt("baltop.entries-per-page", 10);
-        int pageCountChat = (int) Math.ceil(entries.size() / (double) perPageChat);
-        if (pageCountChat <= 0) pageCountChat = 1;
-
+        int pageCountChat = Math.max(1, (int) Math.ceil(entries.size() / (double) perPageChat));
         boolean guiEnabled = plugin.getConfig().getBoolean("baltop.gui.enabled", true);
 
         if (guiEnabled && sender instanceof Player player) {
             openGui(player, entries, page);
-        } else {
-            if (page > pageCountChat) page = pageCountChat;
-            int start = (page - 1) * perPageChat;
-            int end = Math.min(start + perPageChat, entries.size());
-            List<Map.Entry<UUID, Double>> pageEntries = entries.subList(start, end);
-
-            sendChat(sender, pageEntries, page);
+            return true;
         }
 
+        page = Math.min(page, pageCountChat);
+        int start = (page - 1) * perPageChat;
+        int end = Math.min(start + perPageChat, entries.size());
+        sendChat(sender, entries.subList(start, end), page);
         return true;
     }
 
-    private void sendChat(CommandSender sender, List<Map.Entry<UUID, Double>> pageEntries, int page) {
-        String header = plugin.msgNoPrefix("baltop-header")
-                .replace("%page%", String.valueOf(page));
+    private void sendChat(CommandSender sender, List<Map.Entry<UUID, Long>> pageEntries, int page) {
+        String header = plugin.msgNoPrefix("baltop-header").replace("%page%", String.valueOf(page));
         sender.sendMessage(plugin.getPrefix() + header);
 
         int perPageChat = plugin.getConfig().getInt("baltop.entries-per-page", 10);
         int startPos = (page - 1) * perPageChat + 1;
-
         String format = plugin.msgNoPrefix("baltop-entry");
 
-        int index = 0;
-        for (Map.Entry<UUID, Double> entry : pageEntries) {
-            int pos = startPos + index++;
-            OfflinePlayer op = Bukkit.getOfflinePlayer(entry.getKey());
-            String name = op.getName() == null ? "Unknown" : op.getName();
+        int offset = 0;
+        for (Map.Entry<UUID, Long> entry : pageEntries) {
+            OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(entry.getKey());
             String line = format
-                    .replace("%pos%", String.valueOf(pos))
-                    .replace("%player%", name)
-                    .replace("%amount%", String.format("%.0f", entry.getValue()))
+                    .replace("%pos%", String.valueOf(startPos + offset++))
+                    .replace("%player%", offlinePlayer.getName() == null ? "Unknown" : offlinePlayer.getName())
+                    .replace("%amount%", String.valueOf(entry.getValue()))
                     .replace("%symbol%", plugin.getCurrencySymbol());
             sender.sendMessage(plugin.getPrefix() + line);
         }
     }
 
-    public void openGui(Player player, List<Map.Entry<UUID, Double>> entries, int page) {
+    public void openGui(Player player, List<Map.Entry<UUID, Long>> entries, int page) {
         boolean bedrock = plugin.isBedrock(player);
         SkinCache skinCache = plugin.getSkinCache();
+        int pageCount = Math.max(1, (int) Math.ceil(entries.size() / (double) PLAYERS_PER_PAGE));
+        page = Math.min(page, pageCount);
 
-        int perPageGui = PLAYERS_PER_PAGE;
-        int invSize = 54;
-
-        int pageCount = (int) Math.ceil(entries.size() / (double) perPageGui);
-        if (pageCount <= 0) pageCount = 1;
-        if (page > pageCount) page = pageCount;
-
-        int start = (page - 1) * perPageGui;
-        int end = Math.min(start + perPageGui, entries.size());
-        List<Map.Entry<UUID, Double>> pageEntries = entries.subList(start, end);
+        int start = (page - 1) * PLAYERS_PER_PAGE;
+        int end = Math.min(start + PLAYERS_PER_PAGE, entries.size());
+        List<Map.Entry<UUID, Long>> pageEntries = entries.subList(start, end);
 
         String titleRaw = plugin.getConfig().getString("baltop.gui.title", "&6Top Balances &7(Page %page%)")
                 .replace("%page%", String.valueOf(page));
         String title = ChatColor.translateAlternateColorCodes('&', titleRaw);
+        Inventory inventory = Bukkit.createInventory(new BaltopHolder(page), 54, title);
 
-        Inventory inv = Bukkit.createInventory(new BaltopHolder(page), invSize, title);
-
-        int headSlots = perPageGui;
         int slot = 0;
-        for (Map.Entry<UUID, Double> entry : pageEntries) {
-            if (slot >= headSlots) break;
-
+        for (Map.Entry<UUID, Long> entry : pageEntries) {
             UUID uuid = entry.getKey();
-            OfflinePlayer op = Bukkit.getOfflinePlayer(uuid);
-            String name = op.getName() == null ? "Unknown" : op.getName();
-            String displayName = ChatColor.YELLOW + name;
+            OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(uuid);
+            String displayName = ChatColor.YELLOW + (offlinePlayer.getName() == null ? "Unknown" : offlinePlayer.getName());
 
             ItemStack head;
             if (skinCache != null) {
@@ -161,62 +146,54 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             } else {
                 head = new ItemStack(Material.PLAYER_HEAD);
                 SkullMeta meta = (SkullMeta) head.getItemMeta();
-                meta.setOwningPlayer(op);
+                meta.setOwningPlayer(offlinePlayer);
                 meta.setDisplayName(displayName);
                 head.setItemMeta(meta);
             }
 
             SkullMeta meta = (SkullMeta) head.getItemMeta();
-            meta.setLore(Collections.singletonList(
-                    ChatColor.GRAY + "Balance: " + plugin.getCurrencySymbol() + String.format("%.0f", entry.getValue())
-            ));
+            meta.setLore(Collections.singletonList(ChatColor.GRAY + "Balance: " + plugin.getCurrencySymbol() + entry.getValue()));
             head.setItemMeta(meta);
-
-            inv.setItem(slot, head);
-            slot++;
+            inventory.setItem(slot++, head);
         }
 
         if (!bedrock) {
             ItemStack filler = makeItem(Material.GRAY_STAINED_GLASS_PANE, ChatColor.DARK_GRAY + " ");
-            for (int i = headSlots; i < invSize; i++) {
-                inv.setItem(i, filler);
+            for (int index = PLAYERS_PER_PAGE; index < 54; index++) {
+                inventory.setItem(index, filler);
             }
         }
 
         if (page > 1) {
-            ItemStack prev = makeItem(Material.ARROW, ChatColor.YELLOW + "Previous Page");
-            inv.setItem(PREV_SLOT, prev);
+            inventory.setItem(PREV_SLOT, makeItem(Material.ARROW, ChatColor.YELLOW + "Previous Page"));
         }
 
-        ItemStack self;
+        CurrencyService.BalanceView selfBalance = plugin.getCurrencyService().getBalanceView(player);
+        ItemStack selfHead;
         if (skinCache != null) {
-            self = skinCache.createHead(player.getUniqueId(), ChatColor.GOLD + "Your Balance");
+            selfHead = skinCache.createHead(player.getUniqueId(), ChatColor.GOLD + "Your Balance");
         } else {
-            self = new ItemStack(Material.PLAYER_HEAD);
-            SkullMeta sm = (SkullMeta) self.getItemMeta();
-            sm.setOwningPlayer(player);
-            sm.setDisplayName(ChatColor.GOLD + "Your Balance");
-            self.setItemMeta(sm);
+            selfHead = new ItemStack(Material.PLAYER_HEAD);
+            SkullMeta meta = (SkullMeta) selfHead.getItemMeta();
+            meta.setOwningPlayer(player);
+            meta.setDisplayName(ChatColor.GOLD + "Your Balance");
+            selfHead.setItemMeta(meta);
         }
 
-        SkullMeta sm = (SkullMeta) self.getItemMeta();
-        double bank = plugin.getBalanceStorage().getBalance(player.getUniqueId());
-        int items = CurrencyUtils.countCurrencyInPlayer(plugin.getCurrencyManager(), player);
-        double total = bank + items;
+        SkullMeta selfMeta = (SkullMeta) selfHead.getItemMeta();
         List<String> lore = new ArrayList<>();
-        lore.add(ChatColor.GRAY + "Total: " + plugin.getCurrencySymbol() + String.format("%.0f", total));
-        lore.add(ChatColor.DARK_GRAY + "Bank: " + plugin.getCurrencySymbol() + String.format("%.0f", bank));
-        lore.add(ChatColor.DARK_GRAY + "Items: " + plugin.getCurrencySymbol() + items);
-        sm.setLore(lore);
-        self.setItemMeta(sm);
-        inv.setItem(SELF_SLOT, self);
+        lore.add(ChatColor.GRAY + "Total: " + plugin.getCurrencySymbol() + selfBalance.total());
+        lore.add(ChatColor.DARK_GRAY + "Bank: " + plugin.getCurrencySymbol() + selfBalance.bank());
+        lore.add(ChatColor.DARK_GRAY + "Items: " + plugin.getCurrencySymbol() + selfBalance.items());
+        selfMeta.setLore(lore);
+        selfHead.setItemMeta(selfMeta);
+        inventory.setItem(SELF_SLOT, selfHead);
 
         if (page < pageCount) {
-            ItemStack next = makeItem(Material.ARROW, ChatColor.YELLOW + "Next Page");
-            inv.setItem(NEXT_SLOT, next);
+            inventory.setItem(NEXT_SLOT, makeItem(Material.ARROW, ChatColor.YELLOW + "Next Page"));
         }
 
-        player.openInventory(inv);
+        player.openInventory(inventory);
     }
 
     private ItemStack makeItem(Material material, String name) {

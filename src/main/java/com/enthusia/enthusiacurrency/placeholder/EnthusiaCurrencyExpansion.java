@@ -1,9 +1,7 @@
 package com.enthusia.enthusiacurrency.placeholder;
 
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
-import com.enthusia.enthusiacurrency.storage.BalanceStorage;
-import com.enthusia.enthusiacurrency.util.CurrencyManager;
-import com.enthusia.enthusiacurrency.util.CurrencyUtils;
+import com.enthusia.enthusiacurrency.service.CurrencyService;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import org.bukkit.entity.Player;
 
@@ -37,26 +35,17 @@ public class EnthusiaCurrencyExpansion extends PlaceholderExpansion {
 
     @Override
     public String onPlaceholderRequest(Player player, String params) {
-        if (player == null) return "";
-
-        BalanceStorage storage = plugin.getBalanceStorage();
-        CurrencyManager currency = plugin.getCurrencyManager();
-
-        double bank = storage.getBalance(player.getUniqueId());
-        int items = CurrencyUtils.countCurrencyInPlayer(currency, player);
-        double total = bank + items;
-
-        switch (params.toLowerCase()) {
-            case "balance":
-                return String.format("%.0f", total);
-            case "bank":
-                return String.format("%.0f", bank);
-            case "items":
-                return String.valueOf(items);
-            case "top3":
-                return plugin.isInBaltopTop(player.getUniqueId(), 3) ? "true" : "false";
-            default:
-                return null;
+        if (player == null) {
+            return "";
         }
+
+        CurrencyService.BalanceView balanceView = plugin.getCurrencyService().getBalanceView(player);
+        return switch (params.toLowerCase()) {
+            case "balance" -> String.valueOf(balanceView.total());
+            case "bank" -> String.valueOf(balanceView.bank());
+            case "items" -> String.valueOf(balanceView.items());
+            case "top3" -> plugin.isInBaltopTop(player.getUniqueId(), 3) ? "true" : "false";
+            default -> null;
+        };
     }
 }

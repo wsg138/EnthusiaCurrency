@@ -1,40 +1,34 @@
 package com.enthusia.enthusiacurrency.event;
 
-import org.bukkit.Bukkit;
-import org.bukkit.OfflinePlayer;
 import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
 
 import java.util.UUID;
 
-public class BaltopTopEnterEvent extends Event {
+public class CurrencyDepositEvent extends Event {
 
     private static final HandlerList HANDLERS = new HandlerList();
 
     private final UUID playerId;
-    private final int rank;
-    private final long balance;
+    private final long amount;
+    private final long newBalance;
 
-    public BaltopTopEnterEvent(UUID playerId, int rank, long balance) {
+    public CurrencyDepositEvent(UUID playerId, long amount, long newBalance) {
         this.playerId = playerId;
-        this.rank = rank;
-        this.balance = balance;
+        this.amount = amount;
+        this.newBalance = newBalance;
     }
 
     public UUID getPlayerId() {
         return playerId;
     }
 
-    public OfflinePlayer getOfflinePlayer() {
-        return Bukkit.getOfflinePlayer(playerId);
+    public long getAmount() {
+        return amount;
     }
 
-    public int getRank() {
-        return rank;
-    }
-
-    public long getBalance() {
-        return balance;
+    public long getNewBalance() {
+        return newBalance;
     }
 
     @Override

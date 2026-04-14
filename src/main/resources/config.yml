@@ -21,9 +21,14 @@ economy:
 
 baltop:
   entries-per-page: 10
+  refresh-interval-seconds: 15
   gui:
     enabled: true
     title: "&6Top Balances &7(Page %page%)"
+
+storage:
+  flush-interval-seconds: 30
+  flush-threshold: 200
 
 messages:
   prefix: "&8[&6Currency&8] &r"
