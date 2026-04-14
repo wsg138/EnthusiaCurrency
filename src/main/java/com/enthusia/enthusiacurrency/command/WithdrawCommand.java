@@ -3,6 +3,9 @@ package com.enthusia.enthusiacurrency.command;
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
 import com.enthusia.enthusiacurrency.storage.BalanceStorage;
 import com.enthusia.enthusiacurrency.util.CurrencyManager;
+import com.enthusia.enthusiacurrency.event.CurrencyBalanceZeroEvent;
+import com.enthusia.enthusiacurrency.event.CurrencyWithdrawEvent;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
@@ -111,6 +114,13 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
 
         storage.withdraw(player.getUniqueId(), (long) amount);
         storage.saveSingle(player.getUniqueId());
+
+        long newBalance = storage.getBalance(player.getUniqueId());
+        Bukkit.getPluginManager().callEvent(new CurrencyWithdrawEvent(
+                player.getUniqueId(), amount, newBalance));
+        if (newBalance <= 0) {
+            Bukkit.getPluginManager().callEvent(new CurrencyBalanceZeroEvent(player.getUniqueId()));
+        }
 
         if (canUseBlocks && blocks > 0) {
             int remainingBlocks = blocks;

@@ -5,6 +5,9 @@ import com.enthusia.enthusiacurrency.storage.BalanceStorage;
 import com.enthusia.enthusiacurrency.util.CurrencyManager;
 import com.enthusia.enthusiacurrency.util.CurrencyUtils;
 import com.enthusia.enthusiacurrency.util.CurrencyUtils.CurrencyBreakdown;
+import com.enthusia.enthusiacurrency.event.CurrencyBalanceZeroEvent;
+import com.enthusia.enthusiacurrency.event.CurrencyPayEvent;
+import com.enthusia.enthusiacurrency.event.CurrencyPaySelfAttemptEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.*;
@@ -44,6 +47,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         }
 
         if (target.getUniqueId().equals(player.getUniqueId())) {
+            Bukkit.getPluginManager().callEvent(new CurrencyPaySelfAttemptEvent(player.getUniqueId()));
             plugin.sendMsg(player, "self-pay");
             return true;
         }
@@ -142,6 +146,13 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         storage.deposit(target.getUniqueId(), (long) amount);
         storage.saveSingle(player.getUniqueId());
         storage.saveSingle(target.getUniqueId());
+
+        Bukkit.getPluginManager().callEvent(new CurrencyPayEvent(
+                player.getUniqueId(), target.getUniqueId(), amount));
+        long senderBalance = storage.getBalance(player.getUniqueId());
+        if (senderBalance <= 0) {
+            Bukkit.getPluginManager().callEvent(new CurrencyBalanceZeroEvent(player.getUniqueId()));
+        }
 
         String senderMsg = plugin.msgNoPrefix("pay-success-sender")
                 .replace("%target%", target.getName() == null ? "Unknown" : target.getName())

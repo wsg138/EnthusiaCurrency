@@ -5,6 +5,8 @@ import com.enthusia.enthusiacurrency.storage.BalanceStorage;
 import com.enthusia.enthusiacurrency.util.CurrencyManager;
 import com.enthusia.enthusiacurrency.util.CurrencyUtils;
 import com.enthusia.enthusiacurrency.util.CurrencyUtils.CurrencyBreakdown;
+import com.enthusia.enthusiacurrency.event.CurrencyDepositEvent;
+import org.bukkit.Bukkit;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
 
@@ -48,6 +50,9 @@ public class DepositCommand implements CommandExecutor, TabCompleter {
             CurrencyUtils.removeAllFromPlayer(currencyManager, player, items, blocks);
             storage.deposit(player.getUniqueId(), (long) totalValue);
             storage.saveSingle(player.getUniqueId());
+
+            Bukkit.getPluginManager().callEvent(new CurrencyDepositEvent(
+                    player.getUniqueId(), totalValue, storage.getBalance(player.getUniqueId())));
 
             plugin.getBaltopTracker().refreshTop3();
 
@@ -124,6 +129,9 @@ public class DepositCommand implements CommandExecutor, TabCompleter {
         CurrencyUtils.removeAllFromPlayer(currencyManager, player, itemsToRemove, blocksToRemove);
         storage.deposit(player.getUniqueId(), (long) amount);
         storage.saveSingle(player.getUniqueId());
+
+        Bukkit.getPluginManager().callEvent(new CurrencyDepositEvent(
+                player.getUniqueId(), amount, storage.getBalance(player.getUniqueId())));
 
         plugin.getBaltopTracker().refreshTop3();
 
