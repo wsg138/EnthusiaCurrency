@@ -35,12 +35,38 @@ public class EnthusiaCurrencyExpansion extends PlaceholderExpansion {
 
     @Override
     public String onPlaceholderRequest(Player player, String params) {
+        if (params == null || params.isBlank()) {
+            return null;
+        }
+
+        String lower = params.toLowerCase();
+        if (lower.startsWith("top_")) {
+            LeaderboardPlaceholderCache cache = plugin.getLeaderboardPlaceholderCache();
+            if (cache == null) {
+                return "";
+            }
+
+            String[] parts = lower.split("_");
+            if (parts.length != 4) {
+                return "";
+            }
+
+            int rank;
+            try {
+                rank = Integer.parseInt(parts[2]);
+            } catch (NumberFormatException ex) {
+                return "";
+            }
+
+            return cache.resolve(parts[1], rank, parts[3]);
+        }
+
         if (player == null) {
             return "";
         }
 
         CurrencyService.BalanceView balanceView = plugin.getCurrencyService().getBalanceView(player);
-        return switch (params.toLowerCase()) {
+        return switch (lower) {
             case "balance" -> String.valueOf(balanceView.total());
             case "bank" -> String.valueOf(balanceView.bank());
             case "items" -> String.valueOf(balanceView.items());

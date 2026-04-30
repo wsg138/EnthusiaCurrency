@@ -9,6 +9,7 @@ import com.enthusia.enthusiacurrency.listener.BaltopGuiListener;
 import com.enthusia.enthusiacurrency.listener.PlayerProfileListener;
 import com.enthusia.enthusiacurrency.plan.PlanIntegrationHook;
 import com.enthusia.enthusiacurrency.placeholder.EnthusiaCurrencyExpansion;
+import com.enthusia.enthusiacurrency.placeholder.LeaderboardPlaceholderCache;
 import com.enthusia.enthusiacurrency.service.CurrencyService;
 import com.enthusia.enthusiacurrency.skin.SkinCache;
 import com.enthusia.enthusiacurrency.skin.SkinListener;
@@ -44,6 +45,8 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     private PlayerProfileStorage playerProfileStorage;
     private LeaderboardExportService leaderboardExportService;
     private CurrencyAnalyticsStorage currencyAnalyticsStorage;
+    private LeaderboardPlaceholderCache leaderboardPlaceholderCache;
+    private EnthusiaCurrencyExpansion placeholderExpansion;
 
     private SkinCache skinCache;
 
@@ -109,6 +112,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        teardownPlaceholderAPI();
         if (baltopTracker != null) {
             baltopTracker.stop();
         }
@@ -149,9 +153,43 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     }
 
     private void setupPlaceholderAPI() {
-        if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
-            new EnthusiaCurrencyExpansion(this).register();
-            getLogger().info("PlaceholderAPI found, registered EnthusiaCurrency placeholders.");
+        teardownPlaceholderAPI();
+
+        if (!getConfig().getBoolean("placeholderapi.enabled", true)) {
+            return;
+        }
+        if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") == null) {
+            return;
+        }
+
+        try {
+            leaderboardPlaceholderCache = new LeaderboardPlaceholderCache(this);
+            leaderboardPlaceholderCache.start();
+
+            placeholderExpansion = new EnthusiaCurrencyExpansion(this);
+            if (placeholderExpansion.register()) {
+                getLogger().info("PlaceholderAPI found, registered EnthusiaCurrency placeholders.");
+            } else {
+                getLogger().warning("Failed to register PlaceholderAPI expansion.");
+                teardownPlaceholderAPI();
+            }
+        } catch (Throwable ex) {
+            getLogger().warning("Failed to initialize PlaceholderAPI support: " + ex.getMessage());
+            teardownPlaceholderAPI();
+        }
+    }
+
+    private void teardownPlaceholderAPI() {
+        if (placeholderExpansion != null) {
+            try {
+                placeholderExpansion.unregister();
+            } catch (Throwable ignored) {
+            }
+            placeholderExpansion = null;
+        }
+        if (leaderboardPlaceholderCache != null) {
+            leaderboardPlaceholderCache.stop();
+            leaderboardPlaceholderCache = null;
         }
     }
 
@@ -233,6 +271,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         if (leaderboardExportService != null) {
             leaderboardExportService.reload();
         }
+        setupPlaceholderAPI();
     }
 
     private void syncConfigWithDefaults() {
@@ -315,6 +354,10 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     public LeaderboardExportService getLeaderboardExportService() {
         return leaderboardExportService;
+    }
+
+    public LeaderboardPlaceholderCache getLeaderboardPlaceholderCache() {
+        return leaderboardPlaceholderCache;
     }
 
     public CurrencyAnalyticsStorage getCurrencyAnalyticsStorage() {

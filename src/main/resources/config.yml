@@ -44,6 +44,20 @@ integrations:
   plan:
     enabled: true
 
+placeholderapi:
+  enabled: true
+  # Refreshes the cached top placeholders on a fixed interval instead of recalculating on each request.
+  leaderboard-refresh-seconds: 30
+  # Maximum rank exposed to placeholders. Supported range is 1-100.
+  leaderboard-max-rank: 100
+  # Returned when a requested rank does not exist.
+  leaderboard-missing-fallback: "N/A"
+  # Placeholder formats:
+  # %currency_top_balance_<rank>_<field>%
+  # %currency_top_bank_<rank>_<field>%
+  # %currency_top_items_<rank>_<field>%
+  # Fields: name, uuid, value, formatted
+
 analytics:
   retention-days: 90
 
