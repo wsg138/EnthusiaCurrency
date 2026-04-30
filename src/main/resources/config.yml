@@ -30,6 +30,23 @@ storage:
   flush-interval-seconds: 30
   flush-threshold: 200
 
+leaderboards:
+  export:
+    # Exports one public all-time board: balance. The export is capped at the top 100 players.
+    enabled: true
+    directory: "leaderboards"
+    balance-file: "balance.json"
+    include-zero-balances: false
+    interval-seconds: 60
+    debounce-seconds: 10
+
+integrations:
+  plan:
+    enabled: true
+
+analytics:
+  retention-days: 90
+
 messages:
   prefix: "&8[&6Currency&8] &r"
 

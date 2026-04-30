@@ -1,6 +1,7 @@
 package com.enthusia.enthusiacurrency.service;
 
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
+import com.enthusia.enthusiacurrency.analytics.CurrencyAnalyticsAction;
 import com.enthusia.enthusiacurrency.event.CurrencyBalanceZeroEvent;
 import com.enthusia.enthusiacurrency.event.CurrencyDepositEvent;
 import com.enthusia.enthusiacurrency.event.CurrencyPayEvent;
@@ -10,8 +11,10 @@ import com.enthusia.enthusiacurrency.storage.BalanceStorage;
 import com.enthusia.enthusiacurrency.util.CurrencyManager;
 import com.enthusia.enthusiacurrency.util.CurrencyUtils;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,7 +26,7 @@ public class CurrencyService {
     private record CachedItemBalance(long amount, long expiresAtNanos) {
     }
 
-    private static final long ITEM_BALANCE_CACHE_TTL_NANOS = 500_000_000L;
+    private static final long ITEM_BALANCE_CACHE_TTL_NANOS = 2_000_000_000L;
 
     public record BalanceView(long bank, long items, long total) {
     }
@@ -73,12 +76,15 @@ public class CurrencyService {
     }
 
     public DepositResult depositAll(Player player) {
+        plugin.getPlayerProfileStorage().recordOnlinePlayer(player);
         CurrencyUtils.CurrencyBreakdown breakdown = CurrencyUtils.getCurrencyBreakdown(currencyManager, player);
         long totalValue = breakdown.totalValue();
         if (totalValue <= 0) {
+            recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, 0L, getBankBalance(player.getUniqueId()), "no-items");
             return new DepositResult(false, 0L, getBankBalance(player.getUniqueId()));
         }
         if (balanceStorage.wouldOverflow(player.getUniqueId(), totalValue)) {
+            recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, totalValue, getBankBalance(player.getUniqueId()), "overflow");
             return new DepositResult(false, 0L, getBankBalance(player.getUniqueId()));
         }
 
@@ -91,16 +97,20 @@ public class CurrencyService {
         long newBalance = balanceStorage.deposit(player.getUniqueId(), totalValue);
         invalidateItemBalance(player.getUniqueId());
         fireDepositEvent(player.getUniqueId(), totalValue, newBalance);
+        recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, true, player, null, totalValue, newBalance, null);
         markLeaderboardDirty();
         return new DepositResult(true, totalValue, newBalance);
     }
 
     public DepositResult deposit(Player player, long amount) {
+        plugin.getPlayerProfileStorage().recordOnlinePlayer(player);
         CurrencyUtils.CurrencyBreakdown breakdown = CurrencyUtils.getCurrencyBreakdown(currencyManager, player);
         if (amount <= 0 || amount > breakdown.totalValue()) {
+            recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, Math.max(0L, amount), getBankBalance(player.getUniqueId()), "invalid");
             return new DepositResult(false, 0L, getBankBalance(player.getUniqueId()));
         }
         if (balanceStorage.wouldOverflow(player.getUniqueId(), amount)) {
+            recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, amount, getBankBalance(player.getUniqueId()), "overflow");
             return new DepositResult(false, 0L, getBankBalance(player.getUniqueId()));
         }
 
@@ -113,16 +123,19 @@ public class CurrencyService {
         } else {
             int blockValue = currencyManager.getBlockValue();
             if (blockValue <= 0) {
+                recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, amount, getBankBalance(player.getUniqueId()), "invalid-block-value");
                 return new DepositResult(false, 0L, getBankBalance(player.getUniqueId()));
             }
 
             long needFromBlocks = amount - breakdown.items();
             if (needFromBlocks % blockValue != 0) {
+                recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, amount, getBankBalance(player.getUniqueId()), "invalid-denomination");
                 return new DepositResult(false, 0L, getBankBalance(player.getUniqueId()));
             }
 
             long requiredBlocks = needFromBlocks / blockValue;
             if (requiredBlocks > breakdown.blocks()) {
+                recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, amount, getBankBalance(player.getUniqueId()), "not-enough-items");
                 return new DepositResult(false, 0L, getBankBalance(player.getUniqueId()));
             }
 
@@ -139,17 +152,21 @@ public class CurrencyService {
         long newBalance = balanceStorage.deposit(player.getUniqueId(), amount);
         invalidateItemBalance(player.getUniqueId());
         fireDepositEvent(player.getUniqueId(), amount, newBalance);
+        recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, true, player, null, amount, newBalance, null);
         markLeaderboardDirty();
         return new DepositResult(true, amount, newBalance);
     }
 
     public WithdrawResult withdrawToInventory(Player player, long amount) {
+        plugin.getPlayerProfileStorage().recordOnlinePlayer(player);
         if (amount <= 0) {
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, Math.max(0L, amount), getBankBalance(player.getUniqueId()), "invalid");
             return new WithdrawResult(false, 0L, getBankBalance(player.getUniqueId()), "invalid");
         }
 
         long bankBalance = getBankBalance(player.getUniqueId());
         if (bankBalance < amount) {
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, bankBalance, "insufficient");
             return new WithdrawResult(false, 0L, bankBalance, "insufficient");
         }
 
@@ -164,34 +181,19 @@ public class CurrencyService {
             items = amount % blockValue;
         }
 
-        int blockMaxStack = canUseBlocks ? currencyManager.getBlockMaterial().getMaxStackSize() : 64;
-        int itemMaxStack = currencyManager.getMaterial().getMaxStackSize();
-
-        int stacksNeeded = 0;
-        if (blocks > 0) {
-            stacksNeeded += (int) ((blocks + blockMaxStack - 1) / blockMaxStack);
-        }
-        if (items > 0) {
-            stacksNeeded += (int) ((items + itemMaxStack - 1) / itemMaxStack);
-        }
-
-        int freeSlots = 0;
-        for (ItemStack stack : player.getInventory().getStorageContents()) {
-            if (stack == null || stack.getType().isAir()) {
-                freeSlots++;
-            }
-        }
-
-        if (stacksNeeded > freeSlots) {
+        if (!canFitWithdrawal(player.getInventory(), canUseBlocks, blocks, items)) {
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, bankBalance, "inventory-full");
             return new WithdrawResult(false, 0L, bankBalance, "inventory-full");
         }
 
         if (!balanceStorage.withdraw(player.getUniqueId(), amount)) {
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBankBalance(player.getUniqueId()), "insufficient");
             return new WithdrawResult(false, 0L, getBankBalance(player.getUniqueId()), "insufficient");
         }
 
         if (canUseBlocks && blocks > 0) {
             long remainingBlocks = blocks;
+            int blockMaxStack = currencyManager.getBlockMaterial().getMaxStackSize();
             while (remainingBlocks > 0) {
                 int stackSize = (int) Math.min(remainingBlocks, blockMaxStack);
                 Map<Integer, ItemStack> overflow = player.getInventory().addItem(new ItemStack(currencyManager.getBlockMaterial(), stackSize));
@@ -202,6 +204,7 @@ public class CurrencyService {
 
         if (items > 0) {
             long remainingItems = items;
+            int itemMaxStack = currencyManager.getMaterial().getMaxStackSize();
             while (remainingItems > 0) {
                 int stackSize = (int) Math.min(remainingItems, itemMaxStack);
                 Map<Integer, ItemStack> overflow = player.getInventory().addItem(currencyManager.createCurrencyItem(stackSize));
@@ -213,21 +216,27 @@ public class CurrencyService {
         invalidateItemBalance(player.getUniqueId());
         long newBalance = getBankBalance(player.getUniqueId());
         fireWithdrawEvent(player.getUniqueId(), amount, newBalance);
+        recordAnalytics(CurrencyAnalyticsAction.WITHDRAW, true, player, null, amount, newBalance, null);
         markLeaderboardDirty();
         return new WithdrawResult(true, amount, newBalance, null);
     }
 
     public PayResult pay(Player sender, OfflinePlayer target, long amount) {
+        plugin.getPlayerProfileStorage().recordOnlinePlayer(sender);
+        plugin.getPlayerProfileStorage().recordKnownPlayer(target);
         if (target.getUniqueId().equals(sender.getUniqueId())) {
             Bukkit.getPluginManager().callEvent(new CurrencyPaySelfAttemptEvent(sender.getUniqueId()));
+            recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), "self");
             return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), "self");
         }
 
         BalanceView senderView = getBalanceView(sender);
         if (amount <= 0 || senderView.total() < amount) {
+            recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, Math.max(0L, amount), senderView.bank(), "insufficient");
             return new PayResult(false, 0L, senderView.bank(), "insufficient");
         }
         if (balanceStorage.wouldOverflow(target.getUniqueId(), amount)) {
+            recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), "overflow");
             return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), "overflow");
         }
 
@@ -238,6 +247,7 @@ public class CurrencyService {
         long fromBank = Math.min(bankAvailable, remaining);
         if (fromBank > 0) {
             if (!balanceStorage.withdraw(sender.getUniqueId(), fromBank)) {
+                recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), "insufficient");
                 return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), "insufficient");
             }
             remaining -= fromBank;
@@ -251,6 +261,7 @@ public class CurrencyService {
                     balanceStorage.deposit(sender.getUniqueId(), totalRefund);
                 }
                 invalidateItemBalance(sender.getUniqueId());
+                recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), "insufficient");
                 return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), "insufficient");
             }
 
@@ -268,6 +279,7 @@ public class CurrencyService {
             Bukkit.getPluginManager().callEvent(new CurrencyBalanceZeroEvent(sender.getUniqueId()));
         }
 
+        recordAnalytics(CurrencyAnalyticsAction.PAY, true, sender, target, amount, senderBalance, null);
         markLeaderboardDirty();
         return new PayResult(true, amount, senderBalance, null);
     }
@@ -281,12 +293,15 @@ public class CurrencyService {
         }
         long newBalance = balanceStorage.deposit(playerId, amount);
         fireDepositEvent(playerId, amount, newBalance);
+        recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, true, playerId, null, null, null, amount, newBalance, null);
         markLeaderboardDirty();
         return newBalance;
     }
 
     public VaultWithdrawResult withdrawTotal(OfflinePlayer player, long amount) {
+        plugin.getPlayerProfileStorage().recordKnownPlayer(player);
         if (amount <= 0) {
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, Math.max(0L, amount), getBankBalance(player), "invalid");
             return new VaultWithdrawResult(false, 0L, getBankBalance(player), "invalid");
         }
 
@@ -294,11 +309,13 @@ public class CurrencyService {
         if (onlinePlayer != null && onlinePlayer.isOnline()) {
             BalanceView balanceView = getBalanceView(player);
             if (balanceView.total() < amount) {
+                recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, balanceView.total(), "insufficient");
                 return new VaultWithdrawResult(false, 0L, balanceView.total(), "insufficient");
             }
 
             long bankTaken = Math.min(balanceView.bank(), amount);
             if (bankTaken > 0 && !balanceStorage.withdraw(player.getUniqueId(), bankTaken)) {
+                recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBankBalance(player), "insufficient");
                 return new VaultWithdrawResult(false, 0L, getBankBalance(player), "insufficient");
             }
 
@@ -310,6 +327,7 @@ public class CurrencyService {
                         balanceStorage.deposit(player.getUniqueId(), bankTaken);
                     }
                     invalidateItemBalance(player.getUniqueId());
+                    recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBalanceView(player).total(), "insufficient");
                     return new VaultWithdrawResult(false, bankTaken, getBalanceView(player).total(), "insufficient");
                 }
                 if (removed > remaining) {
@@ -320,20 +338,28 @@ public class CurrencyService {
 
             long newBalance = getBankBalance(player);
             fireWithdrawEvent(player.getUniqueId(), amount, newBalance);
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW, true, player, null, amount, getBalanceView(player).total(), null);
             return new VaultWithdrawResult(true, amount, getBalanceView(player).total(), null);
         }
 
         if (!balanceStorage.withdraw(player.getUniqueId(), amount)) {
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBankBalance(player), "insufficient");
             return new VaultWithdrawResult(false, 0L, getBankBalance(player), "insufficient");
         }
 
         long newBalance = getBankBalance(player);
         fireWithdrawEvent(player.getUniqueId(), amount, newBalance);
+        recordAnalytics(CurrencyAnalyticsAction.WITHDRAW, true, player, null, amount, newBalance, null);
         return new VaultWithdrawResult(true, amount, newBalance, null);
     }
 
     public void markLeaderboardDirty() {
-        plugin.getBaltopTracker().refreshTop3();
+        if (plugin.getBaltopTracker() != null) {
+            plugin.getBaltopTracker().refreshTop3();
+        }
+        if (plugin.getLeaderboardExportService() != null) {
+            plugin.getLeaderboardExportService().markDirty();
+        }
     }
 
     private void fireDepositEvent(UUID playerId, long amount, long newBalance) {
@@ -351,6 +377,125 @@ public class CurrencyService {
         for (ItemStack itemStack : overflow.values()) {
             player.getWorld().dropItemNaturally(player.getLocation(), itemStack);
         }
+    }
+
+    private void recordAnalytics(
+            CurrencyAnalyticsAction action,
+            boolean success,
+            OfflinePlayer actor,
+            OfflinePlayer target,
+            long amount,
+            long balanceAfter,
+            String reason
+    ) {
+        if (actor == null) {
+            return;
+        }
+        recordAnalytics(
+                action,
+                success,
+                actor.getUniqueId(),
+                actor.getName(),
+                target == null ? null : target.getUniqueId(),
+                target == null ? null : target.getName(),
+                amount,
+                balanceAfter,
+                reason
+        );
+    }
+
+    private void recordAnalytics(
+            CurrencyAnalyticsAction action,
+            boolean success,
+            UUID actorUuid,
+            String actorName,
+            UUID targetUuid,
+            String targetName,
+            long amount,
+            long balanceAfter,
+            String reason
+    ) {
+        if (plugin.getCurrencyAnalyticsStorage() == null) {
+            return;
+        }
+        plugin.getCurrencyAnalyticsStorage().record(
+                action,
+                success,
+                actorUuid,
+                actorName,
+                targetUuid,
+                targetName,
+                amount,
+                balanceAfter,
+                reason
+        );
+    }
+
+    private boolean canFitWithdrawal(Inventory inventory, boolean canUseBlocks, long blocks, long items) {
+        ItemStack[] simulated = inventory.getStorageContents().clone();
+
+        if (canUseBlocks && blocks > 0) {
+            long remainingBlocks = blocks;
+            while (remainingBlocks > 0) {
+                int stackSize = (int) Math.min(remainingBlocks, currencyManager.getBlockMaterial().getMaxStackSize());
+                if (!simulateAddStack(simulated, new ItemStack(currencyManager.getBlockMaterial(), stackSize))) {
+                    return false;
+                }
+                remainingBlocks -= stackSize;
+            }
+        }
+
+        if (items > 0) {
+            long remainingItems = items;
+            while (remainingItems > 0) {
+                int stackSize = (int) Math.min(remainingItems, currencyManager.getMaterial().getMaxStackSize());
+                if (!simulateAddStack(simulated, currencyManager.createCurrencyItem(stackSize))) {
+                    return false;
+                }
+                remainingItems -= stackSize;
+            }
+        }
+
+        return true;
+    }
+
+    private boolean simulateAddStack(ItemStack[] contents, ItemStack incoming) {
+        int remaining = incoming.getAmount();
+
+        for (int index = 0; index < contents.length && remaining > 0; index++) {
+            ItemStack existing = contents[index];
+            if (existing == null || existing.getType() == Material.AIR) {
+                continue;
+            }
+            if (!existing.isSimilar(incoming)) {
+                continue;
+            }
+
+            int maxStack = existing.getMaxStackSize();
+            int space = maxStack - existing.getAmount();
+            if (space <= 0) {
+                continue;
+            }
+
+            int moved = Math.min(space, remaining);
+            existing.setAmount(existing.getAmount() + moved);
+            remaining -= moved;
+        }
+
+        for (int index = 0; index < contents.length && remaining > 0; index++) {
+            ItemStack existing = contents[index];
+            if (existing != null && existing.getType() != Material.AIR) {
+                continue;
+            }
+
+            int moved = Math.min(incoming.getMaxStackSize(), remaining);
+            ItemStack placed = incoming.clone();
+            placed.setAmount(moved);
+            contents[index] = placed;
+            remaining -= moved;
+        }
+
+        return remaining == 0;
     }
 
     private long getCachedItemBalance(Player player) {

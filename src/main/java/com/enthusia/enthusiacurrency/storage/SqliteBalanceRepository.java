@@ -15,7 +15,8 @@ public class SqliteBalanceRepository implements BalanceRepository {
     private static final String CREATE_TABLE_SQL = """
             CREATE TABLE IF NOT EXISTS balances (
                 uuid TEXT PRIMARY KEY,
-                balance INTEGER NOT NULL
+                balance INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL DEFAULT 0
             )
             """;
 
@@ -35,6 +36,7 @@ public class SqliteBalanceRepository implements BalanceRepository {
             statement.execute("PRAGMA synchronous=NORMAL");
             statement.execute("PRAGMA busy_timeout=5000");
             statement.execute(CREATE_TABLE_SQL);
+            addUpdatedAtColumnIfMissing(statement);
         }
     }
 
@@ -62,11 +64,13 @@ public class SqliteBalanceRepository implements BalanceRepository {
         try (Connection connection = openConnection()) {
             connection.setAutoCommit(false);
             try (PreparedStatement statement = connection.prepareStatement(
-                    "INSERT INTO balances(uuid, balance) VALUES(?, ?) " +
-                            "ON CONFLICT(uuid) DO UPDATE SET balance = excluded.balance")) {
+                    "INSERT INTO balances(uuid, balance, updated_at) VALUES(?, ?, ?) " +
+                            "ON CONFLICT(uuid) DO UPDATE SET balance = excluded.balance, updated_at = excluded.updated_at")) {
+                long updatedAt = System.currentTimeMillis();
                 for (Map.Entry<UUID, Long> entry : balances.entrySet()) {
                     statement.setString(1, entry.getKey().toString());
                     statement.setLong(2, entry.getValue());
+                    statement.setLong(3, updatedAt);
                     statement.addBatch();
                 }
                 statement.executeBatch();
@@ -84,6 +88,17 @@ public class SqliteBalanceRepository implements BalanceRepository {
 
     private Connection openConnection() throws Exception {
         return DriverManager.getConnection(jdbcUrl);
+    }
+
+    private void addUpdatedAtColumnIfMissing(Statement statement) throws Exception {
+        try {
+            statement.execute("ALTER TABLE balances ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
+        } catch (Exception ex) {
+            String message = ex.getMessage();
+            if (message == null || !message.toLowerCase().contains("duplicate column")) {
+                throw ex;
+            }
+        }
     }
 
     public Path getDatabasePath() {

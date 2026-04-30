@@ -1,14 +1,19 @@
 package com.enthusia.enthusiacurrency;
 
 import com.enthusia.enthusiacurrency.command.*;
+import com.enthusia.enthusiacurrency.analytics.CurrencyAnalyticsStorage;
 import com.enthusia.enthusiacurrency.baltop.BaltopTracker;
 import com.enthusia.enthusiacurrency.economy.TokenEconomy;
+import com.enthusia.enthusiacurrency.leaderboard.LeaderboardExportService;
 import com.enthusia.enthusiacurrency.listener.BaltopGuiListener;
+import com.enthusia.enthusiacurrency.listener.PlayerProfileListener;
+import com.enthusia.enthusiacurrency.plan.PlanIntegrationHook;
 import com.enthusia.enthusiacurrency.placeholder.EnthusiaCurrencyExpansion;
 import com.enthusia.enthusiacurrency.service.CurrencyService;
 import com.enthusia.enthusiacurrency.skin.SkinCache;
 import com.enthusia.enthusiacurrency.skin.SkinListener;
 import com.enthusia.enthusiacurrency.storage.BalanceStorage;
+import com.enthusia.enthusiacurrency.storage.PlayerProfileStorage;
 import com.enthusia.enthusiacurrency.util.CurrencyManager;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
@@ -36,6 +41,9 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     private CurrencyService currencyService;
     private TokenEconomy tokenEconomy;
     private BaltopTracker baltopTracker;
+    private PlayerProfileStorage playerProfileStorage;
+    private LeaderboardExportService leaderboardExportService;
+    private CurrencyAnalyticsStorage currencyAnalyticsStorage;
 
     private SkinCache skinCache;
 
@@ -59,9 +67,31 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         }
         this.currencyService = new CurrencyService(this, balanceStorage, currencyManager);
 
+        this.playerProfileStorage = new PlayerProfileStorage(this);
+        try {
+            this.playerProfileStorage.load();
+        } catch (IllegalStateException ex) {
+            getLogger().severe("Failed to start player profile storage: " + ex.getMessage());
+            ex.printStackTrace();
+            Bukkit.getPluginManager().disablePlugin(this);
+            return;
+        }
+
+        this.currencyAnalyticsStorage = new CurrencyAnalyticsStorage(this);
+        try {
+            this.currencyAnalyticsStorage.load();
+        } catch (IllegalStateException ex) {
+            getLogger().severe("Failed to start currency analytics storage: " + ex.getMessage());
+            ex.printStackTrace();
+            Bukkit.getPluginManager().disablePlugin(this);
+            return;
+        }
+
         this.baltopTracker = new BaltopTracker(this);
         this.baltopTracker.initializeSnapshot();
         this.baltopTracker.start();
+
+        this.leaderboardExportService = new LeaderboardExportService(this);
 
         this.skinCache = new SkinCache(this);
         this.skinCache.load();
@@ -71,6 +101,8 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         registerCommands();
         setupPlaceholderAPI();
         registerListeners();
+        this.leaderboardExportService.start();
+        setupPlanIntegration();
 
         getLogger().info("EnthusiaCurrency enabled.");
     }
@@ -80,8 +112,17 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         if (baltopTracker != null) {
             baltopTracker.stop();
         }
+        if (leaderboardExportService != null) {
+            leaderboardExportService.close();
+        }
+        if (currencyAnalyticsStorage != null) {
+            currencyAnalyticsStorage.close();
+        }
         if (balanceStorage != null) {
             balanceStorage.close();
+        }
+        if (playerProfileStorage != null) {
+            playerProfileStorage.close();
         }
         if (skinCache != null) {
             skinCache.save();
@@ -151,6 +192,29 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     private void registerListeners() {
         Bukkit.getPluginManager().registerEvents(new BaltopGuiListener(this), this);
+        if (playerProfileStorage != null) {
+            Bukkit.getPluginManager().registerEvents(new PlayerProfileListener(playerProfileStorage), this);
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                playerProfileStorage.recordOnlinePlayer(player);
+            }
+        }
+    }
+
+    private void setupPlanIntegration() {
+        if (!getConfig().getBoolean("integrations.plan.enabled", true)) {
+            return;
+        }
+        if (Bukkit.getPluginManager().getPlugin("Plan") == null) {
+            return;
+        }
+
+        try {
+            new PlanIntegrationHook(this).hookIntoPlan();
+        } catch (NoClassDefFoundError ex) {
+            getLogger().fine("Plan API was not available; skipping Plan integration.");
+        } catch (Throwable ex) {
+            getLogger().warning("Failed to register Plan integration: " + ex.getMessage());
+        }
     }
 
     public void reloadAndSyncConfig() {
@@ -158,10 +222,16 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         if (balanceStorage != null) {
             balanceStorage.reloadSettings();
         }
+        if (currencyAnalyticsStorage != null) {
+            currencyAnalyticsStorage.reloadSettings();
+        }
         if (baltopTracker != null) {
             baltopTracker.refreshTop3();
             baltopTracker.stop();
             baltopTracker.start();
+        }
+        if (leaderboardExportService != null) {
+            leaderboardExportService.reload();
         }
     }
 
@@ -237,6 +307,18 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     public BaltopTracker getBaltopTracker() {
         return baltopTracker;
+    }
+
+    public PlayerProfileStorage getPlayerProfileStorage() {
+        return playerProfileStorage;
+    }
+
+    public LeaderboardExportService getLeaderboardExportService() {
+        return leaderboardExportService;
+    }
+
+    public CurrencyAnalyticsStorage getCurrencyAnalyticsStorage() {
+        return currencyAnalyticsStorage;
     }
 
     public boolean isInBaltopTop(UUID uuid, int top) {

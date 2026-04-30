@@ -170,6 +170,7 @@ public class TokenEconomy implements Economy {
         }
 
         try {
+            plugin.getPlayerProfileStorage().recordKnownPlayer(offlinePlayer);
             long newBalance = plugin.getCurrencyService().depositBank(offlinePlayer.getUniqueId(), normalized.getAsLong());
             return new EconomyResponse(amount, newBalance, EconomyResponse.ResponseType.SUCCESS, null);
         } catch (IllegalArgumentException ex) {
@@ -259,6 +260,7 @@ public class TokenEconomy implements Economy {
 
     @Override
     public boolean createPlayerAccount(OfflinePlayer player) {
+        plugin.getPlayerProfileStorage().recordKnownPlayer(player);
         storage.ensureAccount(player.getUniqueId());
         return true;
     }
