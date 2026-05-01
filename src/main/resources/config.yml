@@ -34,11 +34,23 @@ leaderboards:
   export:
     # Exports one public all-time board: balance. The export is capped at the top 100 players.
     enabled: true
+    board-id: "balance-active-all"
+    board-label: "Balance"
     directory: "leaderboards"
     balance-file: "balance.json"
     include-zero-balances: false
     interval-seconds: 60
     debounce-seconds: 10
+    r2:
+      enabled: false
+      endpoint: "https://83982f6d6277634f57d216e6a7f24125.r2.cloudflarestorage.com"
+      bucket: "balance-leaderboard"
+      index-key: "leaderboards/index.json"
+      balance-key: "leaderboards/balance-active-all.json"
+      access-key-id: ""
+      secret-access-key: ""
+      access-key-id-env: "ENTHUSIA_CURRENCY_R2_ACCESS_KEY_ID"
+      secret-access-key-env: "ENTHUSIA_CURRENCY_R2_SECRET_ACCESS_KEY"
 
 integrations:
   plan:

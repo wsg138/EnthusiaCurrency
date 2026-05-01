@@ -42,3 +42,9 @@ dependency-reduced-pom.xml
 # Local comparison artifacts
 jar_compare/
 src.zip
+
+# Local secrets
+.env
+*.local.yml
+*.secrets.yml
+r2-secrets.yml

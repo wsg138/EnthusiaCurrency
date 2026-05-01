@@ -27,14 +27,15 @@ import java.util.concurrent.TimeUnit;
 
 public final class LeaderboardExportService {
 
-    private static final String BOARD_BALANCE = "balance";
-    private static final String BOARD_LABEL_BALANCE = "Balance";
+    private static final String DEFAULT_BOARD_ID = "balance-active-all";
+    private static final String DEFAULT_BOARD_LABEL = "Balance";
     private static final int MAX_EXPORTED_PLAYERS = 100;
 
     private final EnthusiaCurrencyPlugin plugin;
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().setPrettyPrinting().create();
     private final DecimalFormat integerFormat = new DecimalFormat("#,###", DecimalFormatSymbols.getInstance(Locale.US));
     private final ExecutorService exportExecutor;
+    private final R2LeaderboardUploader r2Uploader;
 
     private int exportTaskId = -1;
     private int debounceTaskId = -1;
@@ -44,6 +45,7 @@ public final class LeaderboardExportService {
     public LeaderboardExportService(EnthusiaCurrencyPlugin plugin) {
         this.plugin = plugin;
         this.exportExecutor = Executors.newSingleThreadExecutor(new ExportThreadFactory());
+        this.r2Uploader = new R2LeaderboardUploader(plugin);
     }
 
     public void start() {
@@ -166,8 +168,8 @@ public final class LeaderboardExportService {
             }
 
             LeaderboardExport export = new LeaderboardExport(
-                    BOARD_BALANCE,
-                    BOARD_LABEL_BALANCE,
+                    getBoardId(),
+                    getBoardLabel(),
                     currencyPlural,
                     Instant.now().toString(),
                     "EnthusiaCurrency",
@@ -179,15 +181,43 @@ public final class LeaderboardExportService {
             Path outputPath = getOutputPath();
             Files.createDirectories(outputPath.getParent());
             Path tempPath = outputPath.resolveSibling(outputPath.getFileName() + ".tmp");
-            Files.writeString(tempPath, gson.toJson(export), StandardCharsets.UTF_8);
+            String exportJson = gson.toJson(export);
+            Files.writeString(tempPath, exportJson, StandardCharsets.UTF_8);
             try {
                 Files.move(tempPath, outputPath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (IOException atomicMoveFailure) {
                 Files.move(tempPath, outputPath, StandardCopyOption.REPLACE_EXISTING);
             }
+
+            uploadR2Exports(export, exportJson);
         } catch (Exception ex) {
             plugin.getLogger().warning("Failed to export public balance leaderboard: " + ex.getMessage());
         }
+    }
+
+    private void uploadR2Exports(LeaderboardExport export, String exportJson) {
+        if (!r2Uploader.isEnabled()) {
+            return;
+        }
+
+        String boardKey = getR2BalanceKey();
+        r2Uploader.uploadJson(boardKey, exportJson);
+
+        LeaderboardIndex index = new LeaderboardIndex(
+                export.generatedAt(),
+                export.source(),
+                List.of(new LeaderboardIndexEntry(
+                        export.board(),
+                        export.label(),
+                        export.statLabel(),
+                        export.season(),
+                        export.order(),
+                        boardKey,
+                        "/api/leaderboards/" + export.board(),
+                        export.players().size()
+                ))
+        );
+        r2Uploader.uploadJson(getR2IndexKey(), gson.toJson(index));
     }
 
     private String formatCurrencyText(long value, String currencySingular, String currencyPlural) {
@@ -226,6 +256,22 @@ public final class LeaderboardExportService {
         return plugin.getDataFolder().toPath().resolve(directory).resolve(fileName);
     }
 
+    private String getBoardId() {
+        return plugin.getConfig().getString("leaderboards.export.board-id", DEFAULT_BOARD_ID);
+    }
+
+    private String getBoardLabel() {
+        return plugin.getConfig().getString("leaderboards.export.board-label", DEFAULT_BOARD_LABEL);
+    }
+
+    private String getR2IndexKey() {
+        return plugin.getConfig().getString("leaderboards.export.r2.index-key", "leaderboards/index.json");
+    }
+
+    private String getR2BalanceKey() {
+        return plugin.getConfig().getString("leaderboards.export.r2.balance-key", "leaderboards/balance-active-all.json");
+    }
+
     private void stopTask() {
         if (exportTaskId != -1) {
             Bukkit.getScheduler().cancelTask(exportTaskId);
@@ -246,6 +292,25 @@ public final class LeaderboardExportService {
             String season,
             String order,
             List<LeaderboardPlayerEntry> players
+    ) {
+    }
+
+    private record LeaderboardIndex(
+            String generatedAt,
+            String source,
+            List<LeaderboardIndexEntry> boards
+    ) {
+    }
+
+    private record LeaderboardIndexEntry(
+            String id,
+            String label,
+            String statLabel,
+            String season,
+            String order,
+            String key,
+            String apiPath,
+            int count
     ) {
     }
 
