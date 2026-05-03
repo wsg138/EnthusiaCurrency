@@ -3,6 +3,7 @@ package com.enthusia.enthusiacurrency.baltop;
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
 import com.enthusia.enthusiacurrency.command.BaltopCommand;
 import com.enthusia.enthusiacurrency.event.BaltopTopEnterEvent;
+import com.enthusia.enthusiacurrency.storage.PlayerProfile;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
@@ -28,14 +29,18 @@ public class BaltopTracker {
     private boolean refreshInProgress;
     private List<Player> pendingPlayers = List.of();
     private Map<UUID, Long> pendingTotals = Map.of();
+    private Map<UUID, PlayerProfile> pendingProfiles = Map.of();
     private int pendingPlayerIndex;
+    private int refreshGeneration;
 
     public BaltopTracker(EnthusiaCurrencyPlugin plugin) {
         this.plugin = plugin;
     }
 
     public void initializeSnapshot() {
-        refreshNow();
+        if (!refreshInProgress) {
+            startRefresh();
+        }
     }
 
     public void start() {
@@ -58,6 +63,7 @@ public class BaltopTracker {
             batchRefreshTaskId = -1;
         }
         refreshInProgress = false;
+        refreshGeneration++;
     }
 
     public void refreshTop3() {
@@ -96,21 +102,34 @@ public class BaltopTracker {
         return -1;
     }
 
-    private void refreshNow() {
-        List<Map.Entry<UUID, Long>> entries = BaltopCommand.buildEntries(plugin);
-        cachedEntries = entries;
-        dirty = false;
-        checkTop3Changes(entries);
-    }
-
     private void startRefresh() {
         refreshInProgress = true;
+        int generation = ++refreshGeneration;
         pendingPlayers = new ArrayList<>(Bukkit.getOnlinePlayers());
-        pendingTotals = new HashMap<>(plugin.getCurrencyService().getBankSnapshot());
+        pendingTotals = Map.of();
+        pendingProfiles = Map.of();
         pendingPlayerIndex = 0;
 
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            Map<UUID, Long> bankSnapshot = new HashMap<>(plugin.getCurrencyService().getBankSnapshot());
+            Map<UUID, PlayerProfile> profileSnapshot = plugin.getPlayerProfileStorage().getAllProfilesSnapshot();
+            if (!plugin.isEnabled()) {
+                return;
+            }
+            Bukkit.getScheduler().runTask(plugin, () -> continueRefresh(generation, bankSnapshot, profileSnapshot));
+        });
+    }
+
+    private void continueRefresh(int generation, Map<UUID, Long> bankSnapshot, Map<UUID, PlayerProfile> profileSnapshot) {
+        if (!refreshInProgress || generation != refreshGeneration) {
+            return;
+        }
+
+        pendingTotals = bankSnapshot;
+        pendingProfiles = profileSnapshot;
+
         if (pendingPlayers.isEmpty()) {
-            completeRefresh();
+            completeRefreshAsync(generation);
             return;
         }
 
@@ -130,28 +149,34 @@ public class BaltopTracker {
                 Bukkit.getScheduler().cancelTask(batchRefreshTaskId);
                 batchRefreshTaskId = -1;
             }
-            completeRefresh();
+            completeRefreshAsync(refreshGeneration);
         }
     }
 
-    private void completeRefresh() {
-        List<Map.Entry<UUID, Long>> entries = new ArrayList<>(pendingTotals.entrySet());
-        entries.sort((left, right) -> {
-            int amountCompare = Long.compare(right.getValue(), left.getValue());
-            if (amountCompare != 0) {
-                return amountCompare;
-            }
+    private void completeRefreshAsync(int generation) {
+        Map<UUID, Long> totals = new HashMap<>(pendingTotals);
+        Map<UUID, PlayerProfile> profiles = new HashMap<>(pendingProfiles);
 
-            String leftName = Bukkit.getOfflinePlayer(left.getKey()).getName();
-            String rightName = Bukkit.getOfflinePlayer(right.getKey()).getName();
-            return (leftName == null ? "" : leftName).compareToIgnoreCase(rightName == null ? "" : rightName);
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            List<Map.Entry<UUID, Long>> entries = BaltopCommand.sortEntries(totals, profiles);
+            if (!plugin.isEnabled()) {
+                return;
+            }
+            Bukkit.getScheduler().runTask(plugin, () -> publishRefresh(generation, entries));
         });
+    }
+
+    private void publishRefresh(int generation, List<Map.Entry<UUID, Long>> entries) {
+        if (!refreshInProgress || generation != refreshGeneration) {
+            return;
+        }
 
         cachedEntries = entries;
         dirty = false;
         refreshInProgress = false;
         pendingPlayers = List.of();
         pendingTotals = Map.of();
+        pendingProfiles = Map.of();
         pendingPlayerIndex = 0;
         checkTop3Changes(entries);
     }

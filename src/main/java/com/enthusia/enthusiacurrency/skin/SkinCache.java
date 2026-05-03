@@ -1,9 +1,7 @@
 package com.enthusia.enthusiacurrency.skin;
 
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
-import org.bukkit.Bukkit;
 import org.bukkit.Material;
-import org.bukkit.OfflinePlayer;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -86,10 +84,6 @@ public final class SkinCache {
             head = head.clone();
         } else {
             head = new ItemStack(Material.PLAYER_HEAD);
-            SkullMeta meta = (SkullMeta) head.getItemMeta();
-            OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
-            meta.setOwningPlayer(offline);
-            head.setItemMeta(meta);
         }
 
         if (displayName != null) {

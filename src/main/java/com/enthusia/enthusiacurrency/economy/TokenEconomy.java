@@ -164,13 +164,17 @@ public class TokenEconomy implements Economy {
 
     @Override
     public EconomyResponse depositPlayer(OfflinePlayer offlinePlayer, double amount) {
+        return depositPlayer(offlinePlayer, amount, null);
+    }
+
+    private EconomyResponse depositPlayer(OfflinePlayer offlinePlayer, double amount, String fallbackName) {
         OptionalLong normalized = normalizeAmount(amount);
         if (normalized.isEmpty()) {
             return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, "Invalid amount.");
         }
 
         try {
-            plugin.getPlayerProfileStorage().recordKnownPlayer(offlinePlayer);
+            plugin.getPlayerProfileStorage().recordKnownPlayer(offlinePlayer, fallbackName);
             long newBalance = plugin.getCurrencyService().depositBank(offlinePlayer.getUniqueId(), normalized.getAsLong());
             return new EconomyResponse(amount, newBalance, EconomyResponse.ResponseType.SUCCESS, null);
         } catch (IllegalArgumentException ex) {
@@ -180,7 +184,7 @@ public class TokenEconomy implements Economy {
 
     @Override
     public EconomyResponse depositPlayer(String playerName, double amount) {
-        return depositPlayer(Bukkit.getOfflinePlayer(playerName), amount);
+        return depositPlayer(Bukkit.getOfflinePlayer(playerName), amount, playerName);
     }
 
     @Override
@@ -255,12 +259,16 @@ public class TokenEconomy implements Economy {
 
     @Override
     public boolean createPlayerAccount(String playerName) {
-        return createPlayerAccount(Bukkit.getOfflinePlayer(playerName));
+        return createPlayerAccountWithName(Bukkit.getOfflinePlayer(playerName), playerName);
     }
 
     @Override
     public boolean createPlayerAccount(OfflinePlayer player) {
-        plugin.getPlayerProfileStorage().recordKnownPlayer(player);
+        return createPlayerAccountWithName(player, null);
+    }
+
+    private boolean createPlayerAccountWithName(OfflinePlayer player, String fallbackName) {
+        plugin.getPlayerProfileStorage().recordKnownPlayer(player, fallbackName);
         storage.ensureAccount(player.getUniqueId());
         return true;
     }

@@ -66,16 +66,43 @@ public final class PlayerProfileStorage {
     }
 
     public void recordKnownPlayer(OfflinePlayer player) {
-        String username = player.getName();
+        recordKnownPlayer(player, null);
+    }
+
+    public void recordKnownPlayer(OfflinePlayer player, String fallbackUsername) {
+        Player onlinePlayer = player.getPlayer();
+        if (onlinePlayer != null && onlinePlayer.isOnline()) {
+            recordOnlinePlayer(onlinePlayer);
+            return;
+        }
+
+        String username = fallbackUsername == null || fallbackUsername.isBlank()
+                ? player.getName()
+                : fallbackUsername;
         if (username == null || username.isBlank()) {
             return;
         }
         record(player.getUniqueId(), username, null, Instant.now().toEpochMilli());
     }
 
+    public void recordKnownPlayerName(UUID uuid, String username) {
+        if (uuid == null || username == null || username.isBlank()) {
+            return;
+        }
+        record(uuid, username, null, Instant.now().toEpochMilli());
+    }
+
     public PlayerProfile getProfile(UUID uuid) {
         CachedProfile cachedProfile = profiles.get(uuid);
         return cachedProfile == null ? null : cachedProfile.profile();
+    }
+
+    public String getLastKnownName(UUID uuid) {
+        PlayerProfile profile = getProfile(uuid);
+        if (profile == null || profile.lastKnownName() == null || profile.lastKnownName().isBlank()) {
+            return null;
+        }
+        return profile.lastKnownName();
     }
 
     public Map<UUID, PlayerProfile> getAllProfilesSnapshot() {
