@@ -48,6 +48,11 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             totals.put(online.getUniqueId(), balanceView.total());
         }
 
+        Map<UUID, String> nameCache = new HashMap<>();
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            nameCache.put(online.getUniqueId(), online.getName());
+        }
+
         List<Map.Entry<UUID, Long>> entries = new ArrayList<>(totals.entrySet());
         entries.sort((left, right) -> {
             int amountCompare = Long.compare(right.getValue(), left.getValue());
@@ -55,11 +60,19 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
                 return amountCompare;
             }
 
-            OfflinePlayer leftPlayer = Bukkit.getOfflinePlayer(left.getKey());
-            OfflinePlayer rightPlayer = Bukkit.getOfflinePlayer(right.getKey());
-            String leftName = leftPlayer.getName() == null ? "" : leftPlayer.getName();
-            String rightName = rightPlayer.getName() == null ? "" : rightPlayer.getName();
-            return leftName.compareToIgnoreCase(rightName);
+            String leftName = nameCache.get(left.getKey());
+            String rightName = nameCache.get(right.getKey());
+            if (leftName != null && rightName != null) {
+                int nameCompare = leftName.compareToIgnoreCase(rightName);
+                if (nameCompare != 0) {
+                    return nameCompare;
+                }
+            } else if (leftName != null) {
+                return -1;
+            } else if (rightName != null) {
+                return 1;
+            }
+            return left.getKey().compareTo(right.getKey());
         });
         return entries;
     }

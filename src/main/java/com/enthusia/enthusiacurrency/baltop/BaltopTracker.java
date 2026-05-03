@@ -136,15 +136,31 @@ public class BaltopTracker {
 
     private void completeRefresh() {
         List<Map.Entry<UUID, Long>> entries = new ArrayList<>(pendingTotals.entrySet());
+
+        Map<UUID, String> nameCache = new HashMap<>(entries.size());
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            nameCache.put(online.getUniqueId(), online.getName());
+        }
+
         entries.sort((left, right) -> {
             int amountCompare = Long.compare(right.getValue(), left.getValue());
             if (amountCompare != 0) {
                 return amountCompare;
             }
 
-            String leftName = Bukkit.getOfflinePlayer(left.getKey()).getName();
-            String rightName = Bukkit.getOfflinePlayer(right.getKey()).getName();
-            return (leftName == null ? "" : leftName).compareToIgnoreCase(rightName == null ? "" : rightName);
+            String leftName = nameCache.get(left.getKey());
+            String rightName = nameCache.get(right.getKey());
+            if (leftName != null && rightName != null) {
+                int nameCompare = leftName.compareToIgnoreCase(rightName);
+                if (nameCompare != 0) {
+                    return nameCompare;
+                }
+            } else if (leftName != null) {
+                return -1;
+            } else if (rightName != null) {
+                return 1;
+            }
+            return left.getKey().compareTo(right.getKey());
         });
 
         cachedEntries = entries;
