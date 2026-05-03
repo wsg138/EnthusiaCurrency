@@ -10,4 +10,7 @@ public record PlayerProfile(
         long lastSeenAt,
         long updatedAt
 ) {
+    public String lastKnownName() {
+        return username;
+    }
 }

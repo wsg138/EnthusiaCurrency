@@ -4,10 +4,10 @@ import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
 import com.enthusia.enthusiacurrency.gui.BaltopHolder;
 import com.enthusia.enthusiacurrency.service.CurrencyService;
 import com.enthusia.enthusiacurrency.skin.SkinCache;
+import com.enthusia.enthusiacurrency.storage.PlayerProfile;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
-import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -48,6 +48,10 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             totals.put(online.getUniqueId(), balanceView.total());
         }
 
+        return sortEntries(totals, plugin.getPlayerProfileStorage().getAllProfilesSnapshot());
+    }
+
+    public static List<Map.Entry<UUID, Long>> sortEntries(Map<UUID, Long> totals, Map<UUID, PlayerProfile> profiles) {
         List<Map.Entry<UUID, Long>> entries = new ArrayList<>(totals.entrySet());
         entries.sort((left, right) -> {
             int amountCompare = Long.compare(right.getValue(), left.getValue());
@@ -55,11 +59,13 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
                 return amountCompare;
             }
 
-            OfflinePlayer leftPlayer = Bukkit.getOfflinePlayer(left.getKey());
-            OfflinePlayer rightPlayer = Bukkit.getOfflinePlayer(right.getKey());
-            String leftName = leftPlayer.getName() == null ? "" : leftPlayer.getName();
-            String rightName = rightPlayer.getName() == null ? "" : rightPlayer.getName();
-            return leftName.compareToIgnoreCase(rightName);
+            String leftName = nameForSort(left.getKey(), profiles);
+            String rightName = nameForSort(right.getKey(), profiles);
+            int nameCompare = leftName.compareToIgnoreCase(rightName);
+            if (nameCompare != 0) {
+                return nameCompare;
+            }
+            return left.getKey().toString().compareTo(right.getKey().toString());
         });
         return entries;
     }
@@ -109,10 +115,9 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
 
         int offset = 0;
         for (Map.Entry<UUID, Long> entry : pageEntries) {
-            OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(entry.getKey());
             String line = format
                     .replace("%pos%", String.valueOf(startPos + offset++))
-                    .replace("%player%", offlinePlayer.getName() == null ? "Unknown" : offlinePlayer.getName())
+                    .replace("%player%", displayName(entry.getKey()))
                     .replace("%amount%", String.valueOf(entry.getValue()))
                     .replace("%symbol%", plugin.getCurrencySymbol());
             sender.sendMessage(plugin.getPrefix() + line);
@@ -137,8 +142,7 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
         int slot = 0;
         for (Map.Entry<UUID, Long> entry : pageEntries) {
             UUID uuid = entry.getKey();
-            OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(uuid);
-            String displayName = ChatColor.YELLOW + (offlinePlayer.getName() == null ? "Unknown" : offlinePlayer.getName());
+            String displayName = ChatColor.YELLOW + displayName(uuid);
 
             ItemStack head;
             if (skinCache != null) {
@@ -146,7 +150,6 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             } else {
                 head = new ItemStack(Material.PLAYER_HEAD);
                 SkullMeta meta = (SkullMeta) head.getItemMeta();
-                meta.setOwningPlayer(offlinePlayer);
                 meta.setDisplayName(displayName);
                 head.setItemMeta(meta);
             }
@@ -202,6 +205,17 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
         meta.setDisplayName(name);
         item.setItemMeta(meta);
         return item;
+    }
+
+    private String displayName(UUID uuid) {
+        String lastKnownName = plugin.getPlayerProfileStorage().getLastKnownName(uuid);
+        return lastKnownName == null ? "Unknown" : lastKnownName;
+    }
+
+    private static String nameForSort(UUID uuid, Map<UUID, PlayerProfile> profiles) {
+        PlayerProfile profile = profiles.get(uuid);
+        String lastKnownName = profile == null ? null : profile.lastKnownName();
+        return lastKnownName == null ? "" : lastKnownName;
     }
 
     @Override
