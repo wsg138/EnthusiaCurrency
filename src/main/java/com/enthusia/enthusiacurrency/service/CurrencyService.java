@@ -173,10 +173,11 @@ public class CurrencyService {
         int blockValue = currencyManager.getBlockValue();
         boolean canUseBlocks = currencyManager.getBlockMaterial() != null && blockValue > 0;
 
+        long itemBalanceBefore = CurrencyUtils.countCurrencyInPlayer(currencyManager, player);
         long blocks = 0L;
         long items = amount;
 
-        if (canUseBlocks && (amount % blockValue == 0 || amount > 128)) {
+        if (canUseBlocks && amount > 128) {
             blocks = amount / blockValue;
             items = amount % blockValue;
         }
@@ -211,6 +212,17 @@ public class CurrencyService {
                 dropOverflow(player, overflow);
                 remainingItems -= stackSize;
             }
+        }
+
+        long itemBalanceAfter = CurrencyUtils.countCurrencyInPlayer(currencyManager, player);
+        long physicalDelta = itemBalanceAfter - itemBalanceBefore;
+        if (physicalDelta > amount) {
+            long excess = physicalDelta - amount;
+            int removed = CurrencyUtils.removeCurrencyFromPlayer(currencyManager, player, Math.toIntExact(excess));
+            if (removed > excess) {
+                balanceStorage.deposit(player.getUniqueId(), removed - excess);
+            }
+            invalidateItemBalance(player.getUniqueId());
         }
 
         invalidateItemBalance(player.getUniqueId());
