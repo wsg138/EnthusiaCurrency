@@ -432,7 +432,7 @@ public class CurrencyService {
     }
 
     private boolean canFitWithdrawal(Inventory inventory, boolean canUseBlocks, long blocks, long items) {
-        ItemStack[] simulated = inventory.getStorageContents().clone();
+        ItemStack[] simulated = cloneInventoryContents(inventory.getStorageContents());
 
         if (canUseBlocks && blocks > 0) {
             long remainingBlocks = blocks;
@@ -457,6 +457,15 @@ public class CurrencyService {
         }
 
         return true;
+    }
+
+    private ItemStack[] cloneInventoryContents(ItemStack[] contents) {
+        ItemStack[] cloned = new ItemStack[contents.length];
+        for (int index = 0; index < contents.length; index++) {
+            ItemStack itemStack = contents[index];
+            cloned[index] = itemStack == null ? null : itemStack.clone();
+        }
+        return cloned;
     }
 
     private boolean simulateAddStack(ItemStack[] contents, ItemStack incoming) {
