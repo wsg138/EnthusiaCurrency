@@ -1,9 +1,7 @@
 package com.enthusia.enthusiacurrency.skin;
 
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
-import org.bukkit.Bukkit;
 import org.bukkit.Material;
-import org.bukkit.OfflinePlayer;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -21,6 +19,7 @@ public final class SkinCache {
     private final Map<UUID, ItemStack> cache = new ConcurrentHashMap<>();
 
     private File file;
+    private int saveTaskId = -1;
 
     public SkinCache(EnthusiaCurrencyPlugin plugin) {
         this.plugin = plugin;
@@ -65,6 +64,7 @@ public final class SkinCache {
 
         try {
             out.save(file);
+            plugin.getDebugMetrics().skinSave();
         } catch (IOException e) {
             plugin.getLogger().warning("[EnthusiaCurrency] Failed to save skins.yml: " + e.getMessage());
         }
@@ -77,6 +77,7 @@ public final class SkinCache {
         head.setItemMeta(meta);
 
         cache.put(player.getUniqueId(), head);
+        scheduleSave();
     }
 
     public ItemStack createHead(UUID uuid, String displayName) {
@@ -84,11 +85,11 @@ public final class SkinCache {
 
         if (head != null && head.getType() == Material.PLAYER_HEAD) {
             head = head.clone();
+            plugin.getDebugMetrics().skinCacheHit();
         } else {
+            plugin.getDebugMetrics().skinCacheMiss();
             head = new ItemStack(Material.PLAYER_HEAD);
             SkullMeta meta = (SkullMeta) head.getItemMeta();
-            OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
-            meta.setOwningPlayer(offline);
             head.setItemMeta(meta);
         }
 
@@ -99,5 +100,23 @@ public final class SkinCache {
         }
 
         return head;
+    }
+
+    public void scheduleSave() {
+        if (saveTaskId != -1) {
+            plugin.getServer().getScheduler().cancelTask(saveTaskId);
+        }
+        long delayTicks = Math.max(20L, plugin.getConfig().getLong("skin-cache.save-debounce-seconds", 60L) * 20L);
+        saveTaskId = plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            saveTaskId = -1;
+            save();
+        }, delayTicks).getTaskId();
+    }
+
+    public void cancelScheduledSave() {
+        if (saveTaskId != -1) {
+            plugin.getServer().getScheduler().cancelTask(saveTaskId);
+            saveTaskId = -1;
+        }
     }
 }

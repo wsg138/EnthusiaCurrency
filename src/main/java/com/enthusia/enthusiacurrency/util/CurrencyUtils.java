@@ -60,28 +60,60 @@ public final class CurrencyUtils {
         }
     }
 
+    public record CurrencyInventorySnapshot(
+            long inventoryCurrency,
+            long enderChestCurrency,
+            long shulkerCurrency,
+            long totalCurrency,
+            long shulkersScanned
+    ) {
+    }
+
     public static long countCurrencyInPlayer(CurrencyManager manager, Player player) {
         return getCurrencyBreakdown(manager, player).totalValue();
     }
 
     public static CurrencyBreakdown getCurrencyBreakdown(CurrencyManager manager, Player player) {
-        long items = 0;
-        long blocks = 0;
-
-        long[] invCounts = countInInventory(manager, player.getInventory());
-        items += invCounts[0];
-        blocks += invCounts[1];
-
-        long[] ecCounts = countInInventory(manager, player.getEnderChest());
-        items += ecCounts[0];
-        blocks += ecCounts[1];
-
+        CountResult invCounts = countInInventory(manager, player.getInventory());
+        CountResult ecCounts = countInInventory(manager, player.getEnderChest());
+        long items = invCounts.items() + invCounts.shulkerItems() + ecCounts.items() + ecCounts.shulkerItems();
+        long blocks = invCounts.blocks() + invCounts.shulkerBlocks() + ecCounts.blocks() + ecCounts.shulkerBlocks();
         return CurrencyBreakdown.of(items, blocks, manager.getBlockValue());
     }
 
-    private static long[] countInInventory(CurrencyManager manager, Inventory inv) {
+    public static CurrencyInventorySnapshot countCurrencyLocations(CurrencyManager manager, Player player) {
+        CountResult invCounts = countInInventory(manager, player.getInventory());
+        CountResult ecCounts = countInInventory(manager, player.getEnderChest());
+
+        long inventoryCurrency = invCounts.directValue(manager.getBlockValue());
+        long enderChestCurrency = ecCounts.directValue(manager.getBlockValue());
+        long shulkerCurrency = invCounts.shulkerValue(manager.getBlockValue()) + ecCounts.shulkerValue(manager.getBlockValue());
+        return new CurrencyInventorySnapshot(
+                inventoryCurrency,
+                enderChestCurrency,
+                shulkerCurrency,
+                inventoryCurrency + enderChestCurrency + shulkerCurrency,
+                invCounts.shulkersScanned() + ecCounts.shulkersScanned()
+        );
+    }
+
+    private record CountResult(long items, long blocks, long shulkerItems, long shulkerBlocks, long shulkersScanned) {
+
+        long directValue(int blockValue) {
+            return items + blocks * Math.max(blockValue, 0);
+        }
+
+        long shulkerValue(int blockValue) {
+            return shulkerItems + shulkerBlocks * Math.max(blockValue, 0);
+        }
+    }
+
+    private static CountResult countInInventory(CurrencyManager manager, Inventory inv) {
         long items = 0;
         long blocks = 0;
+        long shulkerItems = 0;
+        long shulkerBlocks = 0;
+        long shulkersScanned = 0;
 
         for (int i = 0; i < inv.getSize(); i++) {
             ItemStack stack = inv.getItem(i);
@@ -99,14 +131,15 @@ public final class CurrencyUtils {
 
             if (stack.getItemMeta() instanceof BlockStateMeta meta) {
                 if (meta.getBlockState() instanceof ShulkerBox box) {
-                    long[] inner = countInInventory(manager, box.getInventory());
-                    items += inner[0];
-                    blocks += inner[1];
+                    CountResult inner = countInInventory(manager, box.getInventory());
+                    shulkerItems += inner.items() + inner.shulkerItems();
+                    shulkerBlocks += inner.blocks() + inner.shulkerBlocks();
+                    shulkersScanned += 1L + inner.shulkersScanned();
                 }
             }
         }
 
-        return new long[]{items, blocks};
+        return new CountResult(items, blocks, shulkerItems, shulkerBlocks, shulkersScanned);
     }
 
     public static void removeCurrencyFromPlayerByCounts(CurrencyManager manager,

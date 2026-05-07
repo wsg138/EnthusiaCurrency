@@ -65,7 +65,8 @@ public class EnthusiaCurrencyExpansion extends PlaceholderExpansion {
             return "";
         }
 
-        CurrencyService.BalanceView balanceView = plugin.getCurrencyService().getBalanceView(player);
+        plugin.getDebugMetrics().placeholderCachedReturn();
+        CurrencyService.BalanceView balanceView = plugin.getCurrencyService().getCachedBalanceView(player);
         return switch (lower) {
             case "balance" -> String.valueOf(balanceView.total());
             case "bank" -> String.valueOf(balanceView.bank());

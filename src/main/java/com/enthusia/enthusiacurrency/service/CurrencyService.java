@@ -71,6 +71,15 @@ public class CurrencyService {
         return new BalanceView(bank, items, bank + items);
     }
 
+    public BalanceView getCachedBalanceView(OfflinePlayer player) {
+        long bank = balanceStorage.getBalance(player.getUniqueId());
+        long items = 0L;
+        if (player.isOnline() && player.getPlayer() != null && plugin.getItemBalanceTracker() != null) {
+            items = plugin.getItemBalanceTracker().getCachedTotal(player.getPlayer());
+        }
+        return new BalanceView(bank, items, bank + items);
+    }
+
     public Map<UUID, Long> getBankSnapshot() {
         return balanceStorage.getAllBalancesSnapshot();
     }
@@ -96,6 +105,7 @@ public class CurrencyService {
         );
         long newBalance = balanceStorage.deposit(player.getUniqueId(), totalValue);
         invalidateItemBalance(player.getUniqueId());
+        refreshTrackedItems(player, "deposit-all");
         fireDepositEvent(player.getUniqueId(), totalValue, newBalance);
         recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, true, player, null, totalValue, newBalance, null);
         markLeaderboardDirty();
@@ -151,6 +161,7 @@ public class CurrencyService {
         );
         long newBalance = balanceStorage.deposit(player.getUniqueId(), amount);
         invalidateItemBalance(player.getUniqueId());
+        refreshTrackedItems(player, "deposit");
         fireDepositEvent(player.getUniqueId(), amount, newBalance);
         recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, true, player, null, amount, newBalance, null);
         markLeaderboardDirty();
@@ -214,6 +225,7 @@ public class CurrencyService {
         }
 
         invalidateItemBalance(player.getUniqueId());
+        refreshTrackedItems(player, "withdraw");
         long newBalance = getBankBalance(player.getUniqueId());
         fireWithdrawEvent(player.getUniqueId(), amount, newBalance);
         recordAnalytics(CurrencyAnalyticsAction.WITHDRAW, true, player, null, amount, newBalance, null);
@@ -261,6 +273,7 @@ public class CurrencyService {
                     balanceStorage.deposit(sender.getUniqueId(), totalRefund);
                 }
                 invalidateItemBalance(sender.getUniqueId());
+                refreshTrackedItems(sender, "pay-failed-refund");
                 recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), "insufficient");
                 return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), "insufficient");
             }
@@ -269,6 +282,7 @@ public class CurrencyService {
                 balanceStorage.deposit(sender.getUniqueId(), removed - remaining);
             }
             invalidateItemBalance(sender.getUniqueId());
+            refreshTrackedItems(sender, "pay");
         }
 
         balanceStorage.deposit(target.getUniqueId(), amount);
@@ -327,6 +341,7 @@ public class CurrencyService {
                         balanceStorage.deposit(player.getUniqueId(), bankTaken);
                     }
                     invalidateItemBalance(player.getUniqueId());
+                    refreshTrackedItems(onlinePlayer, "vault-withdraw-failed-refund");
                     recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBalanceView(player).total(), "insufficient");
                     return new VaultWithdrawResult(false, bankTaken, getBalanceView(player).total(), "insufficient");
                 }
@@ -334,6 +349,7 @@ public class CurrencyService {
                     balanceStorage.deposit(player.getUniqueId(), removed - remaining);
                 }
                 invalidateItemBalance(player.getUniqueId());
+                refreshTrackedItems(onlinePlayer, "vault-withdraw");
             }
 
             long newBalance = getBankBalance(player);
@@ -521,5 +537,11 @@ public class CurrencyService {
 
     private void invalidateItemBalance(UUID playerId) {
         itemBalanceCache.remove(playerId);
+    }
+
+    private void refreshTrackedItems(Player player, String reason) {
+        if (plugin.getItemBalanceTracker() != null) {
+            plugin.getItemBalanceTracker().scanNow(player, reason);
+        }
     }
 }

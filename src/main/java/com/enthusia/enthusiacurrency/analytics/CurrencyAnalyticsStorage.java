@@ -11,8 +11,10 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentHashMap;
@@ -70,12 +72,18 @@ public final class CurrencyAnalyticsStorage {
     private final EnthusiaCurrencyPlugin plugin;
     private final CopyOnWriteArrayList<CurrencyAnalyticsEvent> events = new CopyOnWriteArrayList<>();
     private final Map<UUID, CurrencyAnalyticsTotals> playerTotals = new ConcurrentHashMap<>();
+    private final List<CurrencyAnalyticsEvent> pendingEvents = new ArrayList<>();
+    private final Set<UUID> pendingTotalPlayers = new HashSet<>();
+    private final Object pendingLock = new Object();
     private final ExecutorService writerExecutor;
 
     private String jdbcUrl;
     private volatile long retentionMillis;
+    private volatile int flushThreshold = 100;
+    private volatile int flushTaskId = -1;
     private volatile CurrencyAnalyticsTotals serverTotals = new CurrencyAnalyticsTotals(0L, 0L, 0L);
     private volatile boolean closed;
+    private volatile boolean flushQueued;
 
     public CurrencyAnalyticsStorage(EnthusiaCurrencyPlugin plugin) {
         this.plugin = plugin;
@@ -106,6 +114,7 @@ public final class CurrencyAnalyticsStorage {
             playerTotals.clear();
             playerTotals.putAll(loadPlayerTotals());
             serverTotals = loadServerTotals();
+            startFlushTask();
             plugin.getLogger().info("Loaded " + events.size() + " currency analytics event(s).");
         } catch (Exception ex) {
             throw new IllegalStateException("Failed to initialize currency analytics storage", ex);
@@ -115,6 +124,8 @@ public final class CurrencyAnalyticsStorage {
     public void reloadSettings() {
         long retentionDays = Math.max(1L, plugin.getConfig().getLong("analytics.retention-days", 90L));
         retentionMillis = Duration.ofDays(retentionDays).toMillis();
+        flushThreshold = Math.max(1, plugin.getConfig().getInt("analytics.flush-threshold", 100));
+        restartFlushTask();
     }
 
     public void record(
@@ -128,7 +139,7 @@ public final class CurrencyAnalyticsStorage {
             long balanceAfter,
             String reason
     ) {
-        if (closed || actorUuid == null || action == null) {
+        if (closed || actorUuid == null || action == null || !plugin.getConfig().getBoolean("analytics.enabled", true)) {
             return;
         }
 
@@ -147,7 +158,14 @@ public final class CurrencyAnalyticsStorage {
         events.add(event);
         updateTotalsInMemory(event);
         pruneMemory();
-        writerExecutor.execute(() -> insertEvent(event));
+        synchronized (pendingLock) {
+            pendingEvents.add(event);
+            pendingTotalPlayers.add(actorUuid);
+            plugin.getDebugMetrics().analyticsQueued();
+            if (pendingEvents.size() >= flushThreshold) {
+                queueFlush();
+            }
+        }
     }
 
     public CurrencyAnalyticsSummary summarizeServer(Duration window) {
@@ -184,9 +202,15 @@ public final class CurrencyAnalyticsStorage {
         }
 
         closed = true;
+        if (flushTaskId != -1) {
+            plugin.getServer().getScheduler().cancelTask(flushTaskId);
+            flushTaskId = -1;
+        }
+        queueFlush();
         writerExecutor.shutdown();
         try {
-            if (!writerExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+            long timeout = Math.max(1L, plugin.getConfig().getLong("analytics.shutdown-flush-timeout-seconds", 10L));
+            if (!writerExecutor.awaitTermination(timeout, TimeUnit.SECONDS)) {
                 plugin.getLogger().warning("Currency analytics writer did not stop cleanly within 10 seconds.");
                 writerExecutor.shutdownNow();
             }
@@ -214,27 +238,89 @@ public final class CurrencyAnalyticsStorage {
         return new CurrencyAnalyticsSummary(deposited, withdrawn);
     }
 
-    private void insertEvent(CurrencyAnalyticsEvent event) {
-        try (Connection connection = openConnection();
-             PreparedStatement statement = connection.prepareStatement("""
+    private void flushPending() {
+        List<CurrencyAnalyticsEvent> eventsToSave;
+        Set<UUID> totalPlayersToSave;
+        synchronized (pendingLock) {
+            if (pendingEvents.isEmpty() && pendingTotalPlayers.isEmpty()) {
+                flushQueued = false;
+                return;
+            }
+            eventsToSave = new ArrayList<>(pendingEvents);
+            totalPlayersToSave = new HashSet<>(pendingTotalPlayers);
+            pendingEvents.clear();
+            pendingTotalPlayers.clear();
+        }
+
+        try (Connection connection = openConnection()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement eventStatement = connection.prepareStatement("""
                      INSERT INTO currency_analytics_events(
                          occurred_at, actor_uuid, actor_name, target_uuid, target_name,
                          action, success, amount, balance_after, reason
                      ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     """);
+                 PreparedStatement playerStatement = connection.prepareStatement("""
+                     INSERT INTO currency_analytics_player_totals(uuid, deposited, withdrawn, last_activity_at)
+                     VALUES(?, ?, ?, ?)
+                     ON CONFLICT(uuid) DO UPDATE SET
+                         deposited = excluded.deposited,
+                         withdrawn = excluded.withdrawn,
+                         last_activity_at = excluded.last_activity_at
+                     """);
+                 PreparedStatement serverStatement = connection.prepareStatement("""
+                     INSERT INTO currency_analytics_server_totals(id, deposited, withdrawn, last_activity_at)
+                     VALUES(1, ?, ?, ?)
+                     ON CONFLICT(id) DO UPDATE SET
+                         deposited = excluded.deposited,
+                         withdrawn = excluded.withdrawn,
+                         last_activity_at = excluded.last_activity_at
                      """)) {
-            statement.setLong(1, event.occurredAt());
-            statement.setString(2, event.actorUuid().toString());
-            statement.setString(3, event.actorName());
-            statement.setString(4, event.targetUuid() == null ? null : event.targetUuid().toString());
-            statement.setString(5, event.targetName());
-            statement.setString(6, event.action().name());
-            statement.setInt(7, event.success() ? 1 : 0);
-            statement.setLong(8, event.amount());
-            statement.setLong(9, event.balanceAfter());
-            statement.setString(10, event.reason());
-            statement.executeUpdate();
+                for (CurrencyAnalyticsEvent event : eventsToSave) {
+                    eventStatement.setLong(1, event.occurredAt());
+                    eventStatement.setString(2, event.actorUuid().toString());
+                    eventStatement.setString(3, event.actorName());
+                    eventStatement.setString(4, event.targetUuid() == null ? null : event.targetUuid().toString());
+                    eventStatement.setString(5, event.targetName());
+                    eventStatement.setString(6, event.action().name());
+                    eventStatement.setInt(7, event.success() ? 1 : 0);
+                    eventStatement.setLong(8, event.amount());
+                    eventStatement.setLong(9, event.balanceAfter());
+                    eventStatement.setString(10, event.reason());
+                    eventStatement.addBatch();
+                }
+                eventStatement.executeBatch();
+
+                for (UUID uuid : totalPlayersToSave) {
+                    CurrencyAnalyticsTotals totals = playerTotals.get(uuid);
+                    if (totals == null) {
+                        continue;
+                    }
+                    playerStatement.setString(1, uuid.toString());
+                    playerStatement.setLong(2, totals.deposited());
+                    playerStatement.setLong(3, totals.withdrawn());
+                    playerStatement.setLong(4, totals.lastActivityAt());
+                    playerStatement.addBatch();
+                }
+                playerStatement.executeBatch();
+
+                CurrencyAnalyticsTotals totals = serverTotals;
+                serverStatement.setLong(1, totals.deposited());
+                serverStatement.setLong(2, totals.withdrawn());
+                serverStatement.setLong(3, totals.lastActivityAt());
+                serverStatement.executeUpdate();
+            }
+            connection.commit();
+            plugin.getDebugMetrics().analyticsFlushed(eventsToSave.size());
         } catch (Exception ex) {
-            plugin.getLogger().warning("Failed to store currency analytics event: " + ex.getMessage());
+            synchronized (pendingLock) {
+                pendingEvents.addAll(0, eventsToSave);
+                pendingTotalPlayers.addAll(totalPlayersToSave);
+            }
+            plugin.getDebugMetrics().analyticsFailed();
+            plugin.getLogger().warning("Failed to store currency analytics batch: " + ex.getMessage());
+        } finally {
+            flushQueued = false;
         }
     }
 
@@ -258,8 +344,40 @@ public final class CurrencyAnalyticsStorage {
                 Math.max(currentServer.lastActivityAt(), event.occurredAt())
         );
 
-        writerExecutor.execute(() -> upsertPlayerTotals(event.actorUuid()));
-        writerExecutor.execute(this::upsertServerTotals);
+        synchronized (pendingLock) {
+            pendingTotalPlayers.add(event.actorUuid());
+        }
+    }
+
+    private void startFlushTask() {
+        if (flushTaskId != -1 || closed) {
+            return;
+        }
+        long intervalSeconds = Math.max(1L, plugin.getConfig().getLong("analytics.flush-interval-seconds", 10L));
+        flushTaskId = plugin.getServer().getScheduler().runTaskTimerAsynchronously(
+                plugin,
+                this::queueFlush,
+                intervalSeconds * 20L,
+                intervalSeconds * 20L
+        ).getTaskId();
+    }
+
+    private void restartFlushTask() {
+        if (flushTaskId != -1) {
+            plugin.getServer().getScheduler().cancelTask(flushTaskId);
+            flushTaskId = -1;
+        }
+        if (!closed && plugin.isEnabled()) {
+            startFlushTask();
+        }
+    }
+
+    private void queueFlush() {
+        if (flushQueued) {
+            return;
+        }
+        flushQueued = true;
+        writerExecutor.execute(this::flushPending);
     }
 
     private List<CurrencyAnalyticsEvent> loadRecentEvents(long since) throws Exception {

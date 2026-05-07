@@ -3,7 +3,7 @@ package com.enthusia.enthusiacurrency.placeholder;
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
 import com.enthusia.enthusiacurrency.baltop.BaltopTracker;
 import com.enthusia.enthusiacurrency.storage.PlayerProfile;
-import com.enthusia.enthusiacurrency.util.CurrencyUtils;
+import com.enthusia.enthusiacurrency.item.ItemBalanceSnapshot;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
@@ -94,7 +94,13 @@ public final class LeaderboardPlaceholderCache {
     }
 
     public void reloadSettings() {
-        refreshIntervalSeconds = Math.max(10L, plugin.getConfig().getLong("placeholderapi.leaderboard-refresh-seconds", 30L));
+        refreshIntervalSeconds = Math.max(10L, plugin.getConfig().getLong(
+                "placeholders.cache-seconds",
+                plugin.getConfig().getLong(
+                        "item-leaderboard.cache-seconds",
+                        plugin.getConfig().getLong("placeholderapi.leaderboard-refresh-seconds", 30L)
+                )
+        ));
         maxRank = clampMaxRank(plugin.getConfig().getInt("placeholderapi.leaderboard-max-rank", 100));
 
         String fallback = plugin.getConfig().getString("placeholderapi.leaderboard-missing-fallback", "N/A");
@@ -142,16 +148,25 @@ public final class LeaderboardPlaceholderCache {
     }
 
     private List<Entry> buildItemEntries() {
+        if (!plugin.getConfig().getBoolean("item-leaderboard.enabled", true)) {
+            return List.of();
+        }
+        if (plugin.getItemBalanceTracker() == null) {
+            return List.of();
+        }
         Map<UUID, String> names = snapshotNames();
         List<Entry> entries = new ArrayList<>();
 
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            long value = CurrencyUtils.countCurrencyInPlayer(plugin.getCurrencyManager(), player);
+        for (ItemBalanceSnapshot snapshot : plugin.getItemBalanceTracker().getSnapshots().values()) {
+            long value = snapshot.totalItemCurrency();
             if (value <= 0L) {
                 continue;
             }
 
-            UUID uuid = player.getUniqueId();
+            UUID uuid = snapshot.uuid();
+            if (snapshot.lastKnownName() != null && !snapshot.lastKnownName().isBlank()) {
+                names.put(uuid, snapshot.lastKnownName());
+            }
             entries.add(new Entry(uuid, displayName(uuid, names), value));
         }
 

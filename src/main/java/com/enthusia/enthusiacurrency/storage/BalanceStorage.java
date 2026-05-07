@@ -243,6 +243,7 @@ public class BalanceStorage {
 
     private void markDirty(UUID uuid) {
         dirtyKeys.add(uuid);
+        plugin.getDebugMetrics().balanceDirtyMark();
         if (dirtyKeys.size() >= flushThreshold) {
             flushAsync();
         }
@@ -250,6 +251,7 @@ public class BalanceStorage {
 
     private void runFlushLoop() {
         Throwable failure = null;
+        long startedAt = System.currentTimeMillis();
         try {
             while (true) {
                 Map<UUID, CachedBalance> snapshot = snapshotDirtyBalances();
@@ -275,6 +277,7 @@ public class BalanceStorage {
             plugin.getLogger().severe("Failed to flush balances: " + ex.getMessage());
             ex.printStackTrace();
         } finally {
+            plugin.getDebugMetrics().balanceFlushDuration(System.currentTimeMillis() - startedAt);
             List<CompletableFuture<Void>> toComplete;
             synchronized (flushLock) {
                 flushQueued = false;

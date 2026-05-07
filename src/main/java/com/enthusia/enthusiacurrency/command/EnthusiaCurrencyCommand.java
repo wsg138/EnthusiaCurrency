@@ -20,9 +20,13 @@ public class EnthusiaCurrencyCommand implements CommandExecutor {
             return true;
         }
 
+        if (args.length != 1 || !args[0].equalsIgnoreCase("reload")) {
+            sender.sendMessage(plugin.getPrefix() + "Usage: /currency reload");
+            return true;
+        }
+
         plugin.getBalanceStorage().save();
         plugin.reloadAndSyncConfig();
-        plugin.getCurrencyManager().reload();
         plugin.sendMsg(sender, "reloaded");
         return true;
     }

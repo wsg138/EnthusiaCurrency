@@ -1,3 +1,5 @@
+config-version: 2
+
 currency:
   material: RAW_GOLD
 
@@ -42,7 +44,7 @@ leaderboards:
     interval-seconds: 60
     debounce-seconds: 10
     r2:
-      enabled: false
+      enabled: true
       endpoint: "https://83982f6d6277634f57d216e6a7f24125.r2.cloudflarestorage.com"
       bucket: "balance-leaderboard"
       index-key: "leaderboards/index.json"
@@ -51,6 +53,29 @@ leaderboards:
       secret-access-key: ""
       access-key-id-env: "ENTHUSIA_CURRENCY_R2_ACCESS_KEY_ID"
       secret-access-key-env: "ENTHUSIA_CURRENCY_R2_SECRET_ACCESS_KEY"
+
+item-balance:
+  debounce-seconds: 2
+  stale-after-seconds: 30
+
+item-leaderboard:
+  enabled: true
+  cache-seconds: 30
+
+item-balance-scan:
+  enabled: true
+  interval-seconds: 60
+  max-players-per-tick: 1
+  repair-mode: true
+  debug-log-repairs: false
+
+skin-cache:
+  save-debounce-seconds: 60
+
+debug:
+  performance:
+    enabled: false
+    log-interval-seconds: 300
 
 integrations:
   plan:
@@ -71,7 +96,14 @@ placeholderapi:
   # Fields: name, uuid, value, formatted
 
 analytics:
+  enabled: true
   retention-days: 90
+  flush-interval-seconds: 10
+  flush-threshold: 100
+  shutdown-flush-timeout-seconds: 10
+
+placeholders:
+  cache-seconds: 30
 
 messages:
   prefix: "&8[&6Currency&8] &r"

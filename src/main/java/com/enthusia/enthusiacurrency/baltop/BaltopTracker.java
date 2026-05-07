@@ -3,6 +3,7 @@ package com.enthusia.enthusiacurrency.baltop;
 import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
 import com.enthusia.enthusiacurrency.command.BaltopCommand;
 import com.enthusia.enthusiacurrency.event.BaltopTopEnterEvent;
+import com.enthusia.enthusiacurrency.storage.PlayerProfile;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
@@ -28,6 +29,8 @@ public class BaltopTracker {
     private boolean refreshInProgress;
     private List<Player> pendingPlayers = List.of();
     private Map<UUID, Long> pendingTotals = Map.of();
+    private long refreshStartedAtMillis;
+    private int playersProcessed;
     private int pendingPlayerIndex;
 
     public BaltopTracker(EnthusiaCurrencyPlugin plugin) {
@@ -105,6 +108,8 @@ public class BaltopTracker {
 
     private void startRefresh() {
         refreshInProgress = true;
+        refreshStartedAtMillis = System.currentTimeMillis();
+        playersProcessed = 0;
         pendingPlayers = new ArrayList<>(Bukkit.getOnlinePlayers());
         pendingTotals = new HashMap<>(plugin.getCurrencyService().getBankSnapshot());
         pendingPlayerIndex = 0;
@@ -121,8 +126,9 @@ public class BaltopTracker {
         int processed = 0;
         while (pendingPlayerIndex < pendingPlayers.size() && processed < REFRESH_BATCH_SIZE) {
             Player player = pendingPlayers.get(pendingPlayerIndex++);
-            pendingTotals.put(player.getUniqueId(), plugin.getCurrencyService().getBalanceView(player).total());
+            pendingTotals.put(player.getUniqueId(), plugin.getCurrencyService().getCachedBalanceView(player).total());
             processed++;
+            playersProcessed++;
         }
 
         if (pendingPlayerIndex >= pendingPlayers.size()) {
@@ -136,14 +142,15 @@ public class BaltopTracker {
 
     private void completeRefresh() {
         List<Map.Entry<UUID, Long>> entries = new ArrayList<>(pendingTotals.entrySet());
+        Map<UUID, PlayerProfile> profiles = plugin.getPlayerProfileStorage().getAllProfilesSnapshot();
         entries.sort((left, right) -> {
             int amountCompare = Long.compare(right.getValue(), left.getValue());
             if (amountCompare != 0) {
                 return amountCompare;
             }
 
-            String leftName = Bukkit.getOfflinePlayer(left.getKey()).getName();
-            String rightName = Bukkit.getOfflinePlayer(right.getKey()).getName();
+            String leftName = profileName(profiles, left.getKey());
+            String rightName = profileName(profiles, right.getKey());
             return (leftName == null ? "" : leftName).compareToIgnoreCase(rightName == null ? "" : rightName);
         });
 
@@ -154,6 +161,15 @@ public class BaltopTracker {
         pendingTotals = Map.of();
         pendingPlayerIndex = 0;
         checkTop3Changes(entries);
+        plugin.getDebugMetrics().baltopRefresh(System.currentTimeMillis() - refreshStartedAtMillis, playersProcessed);
+    }
+
+    private String profileName(Map<UUID, PlayerProfile> profiles, UUID uuid) {
+        PlayerProfile profile = profiles.get(uuid);
+        if (profile != null && profile.username() != null) {
+            return profile.username();
+        }
+        return "";
     }
 
     private void checkTop3Changes(List<Map.Entry<UUID, Long>> entries) {

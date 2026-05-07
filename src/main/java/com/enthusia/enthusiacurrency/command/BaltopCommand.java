@@ -4,10 +4,10 @@ import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
 import com.enthusia.enthusiacurrency.gui.BaltopHolder;
 import com.enthusia.enthusiacurrency.service.CurrencyService;
 import com.enthusia.enthusiacurrency.skin.SkinCache;
+import com.enthusia.enthusiacurrency.storage.PlayerProfile;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
-import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -44,10 +44,11 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
         Map<UUID, Long> totals = new HashMap<>(currencyService.getBankSnapshot());
 
         for (Player online : Bukkit.getOnlinePlayers()) {
-            CurrencyService.BalanceView balanceView = currencyService.getBalanceView(online);
+            CurrencyService.BalanceView balanceView = currencyService.getCachedBalanceView(online);
             totals.put(online.getUniqueId(), balanceView.total());
         }
 
+        Map<UUID, PlayerProfile> profiles = plugin.getPlayerProfileStorage().getAllProfilesSnapshot();
         List<Map.Entry<UUID, Long>> entries = new ArrayList<>(totals.entrySet());
         entries.sort((left, right) -> {
             int amountCompare = Long.compare(right.getValue(), left.getValue());
@@ -55,13 +56,19 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
                 return amountCompare;
             }
 
-            OfflinePlayer leftPlayer = Bukkit.getOfflinePlayer(left.getKey());
-            OfflinePlayer rightPlayer = Bukkit.getOfflinePlayer(right.getKey());
-            String leftName = leftPlayer.getName() == null ? "" : leftPlayer.getName();
-            String rightName = rightPlayer.getName() == null ? "" : rightPlayer.getName();
+            String leftName = profileName(profiles, left.getKey());
+            String rightName = profileName(profiles, right.getKey());
             return leftName.compareToIgnoreCase(rightName);
         });
         return entries;
+    }
+
+    private static String profileName(Map<UUID, PlayerProfile> profiles, UUID uuid) {
+        PlayerProfile profile = profiles.get(uuid);
+        if (profile != null && profile.username() != null) {
+            return profile.username();
+        }
+        return "";
     }
 
     @Override
@@ -109,10 +116,11 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
 
         int offset = 0;
         for (Map.Entry<UUID, Long> entry : pageEntries) {
-            OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(entry.getKey());
+            PlayerProfile profile = plugin.getPlayerProfileStorage().getProfile(entry.getKey());
+            String playerName = profile == null || profile.username() == null ? "Unknown" : profile.username();
             String line = format
                     .replace("%pos%", String.valueOf(startPos + offset++))
-                    .replace("%player%", offlinePlayer.getName() == null ? "Unknown" : offlinePlayer.getName())
+                    .replace("%player%", playerName)
                     .replace("%amount%", String.valueOf(entry.getValue()))
                     .replace("%symbol%", plugin.getCurrencySymbol());
             sender.sendMessage(plugin.getPrefix() + line);
@@ -137,8 +145,9 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
         int slot = 0;
         for (Map.Entry<UUID, Long> entry : pageEntries) {
             UUID uuid = entry.getKey();
-            OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(uuid);
-            String displayName = ChatColor.YELLOW + (offlinePlayer.getName() == null ? "Unknown" : offlinePlayer.getName());
+            PlayerProfile profile = plugin.getPlayerProfileStorage().getProfile(uuid);
+            String playerName = profile == null || profile.username() == null ? "Unknown" : profile.username();
+            String displayName = ChatColor.YELLOW + playerName;
 
             ItemStack head;
             if (skinCache != null) {
@@ -146,7 +155,6 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             } else {
                 head = new ItemStack(Material.PLAYER_HEAD);
                 SkullMeta meta = (SkullMeta) head.getItemMeta();
-                meta.setOwningPlayer(offlinePlayer);
                 meta.setDisplayName(displayName);
                 head.setItemMeta(meta);
             }
@@ -168,7 +176,7 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             inventory.setItem(PREV_SLOT, makeItem(Material.ARROW, ChatColor.YELLOW + "Previous Page"));
         }
 
-        CurrencyService.BalanceView selfBalance = plugin.getCurrencyService().getBalanceView(player);
+        CurrencyService.BalanceView selfBalance = plugin.getCurrencyService().getCachedBalanceView(player);
         ItemStack selfHead;
         if (skinCache != null) {
             selfHead = skinCache.createHead(player.getUniqueId(), ChatColor.GOLD + "Your Balance");

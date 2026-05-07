@@ -3,7 +3,10 @@ package com.enthusia.enthusiacurrency;
 import com.enthusia.enthusiacurrency.command.*;
 import com.enthusia.enthusiacurrency.analytics.CurrencyAnalyticsStorage;
 import com.enthusia.enthusiacurrency.baltop.BaltopTracker;
+import com.enthusia.enthusiacurrency.config.ConfigMigrator;
+import com.enthusia.enthusiacurrency.debug.DebugMetrics;
 import com.enthusia.enthusiacurrency.economy.TokenEconomy;
+import com.enthusia.enthusiacurrency.item.ItemBalanceTracker;
 import com.enthusia.enthusiacurrency.leaderboard.LeaderboardExportService;
 import com.enthusia.enthusiacurrency.listener.BaltopGuiListener;
 import com.enthusia.enthusiacurrency.listener.PlayerProfileListener;
@@ -20,17 +23,12 @@ import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.PluginCommand;
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Method;
 import java.util.UUID;
 
 public class EnthusiaCurrencyPlugin extends JavaPlugin {
@@ -49,12 +47,21 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     private EnthusiaCurrencyExpansion placeholderExpansion;
 
     private SkinCache skinCache;
+    private ConfigMigrator configMigrator;
+    private DebugMetrics debugMetrics;
+    private ItemBalanceTracker itemBalanceTracker;
+    private BaltopCommand baltopCommand;
+    private Object floodgateApi;
+    private Method floodgateIsPlayerMethod;
 
     @Override
     public void onEnable() {
         instance = this;
 
-        syncConfigWithDefaults();
+        this.configMigrator = new ConfigMigrator(this);
+        this.configMigrator.migrateConfig();
+        this.debugMetrics = new DebugMetrics(this);
+        this.debugMetrics.reload();
 
         this.currencyManager = new CurrencyManager(this);
         this.currencyManager.reload();
@@ -100,6 +107,11 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         this.skinCache.load();
         Bukkit.getPluginManager().registerEvents(new SkinListener(this.skinCache), this);
 
+        this.itemBalanceTracker = new ItemBalanceTracker(this);
+        this.itemBalanceTracker.start();
+        this.baltopTracker.refreshTop3();
+        setupFloodgateCache();
+
         setupVault();
         registerCommands();
         setupPlaceholderAPI();
@@ -119,6 +131,15 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         if (leaderboardExportService != null) {
             leaderboardExportService.close();
         }
+        if (itemBalanceTracker != null) {
+            itemBalanceTracker.stop();
+        }
+        if (debugMetrics != null) {
+            debugMetrics.stop();
+        }
+        if (tokenEconomy != null) {
+            Bukkit.getServicesManager().unregister(Economy.class, tokenEconomy);
+        }
         if (currencyAnalyticsStorage != null) {
             currencyAnalyticsStorage.close();
         }
@@ -129,6 +150,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
             playerProfileStorage.close();
         }
         if (skinCache != null) {
+            skinCache.cancelScheduledSave();
             skinCache.save();
         }
         getLogger().info("EnthusiaCurrency disabled.");
@@ -202,7 +224,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         PluginCommand cur = getCommand("currency");
 
         BalanceCommand balanceCommand = new BalanceCommand(this);
-        BaltopCommand baltopCommand = new BaltopCommand(this);
+        baltopCommand = new BaltopCommand(this);
         DepositCommand depositCommand = new DepositCommand(this);
         WithdrawCommand withdrawCommand = new WithdrawCommand(this);
         PayCommand payCommand = new PayCommand(this);
@@ -229,7 +251,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     }
 
     private void registerListeners() {
-        Bukkit.getPluginManager().registerEvents(new BaltopGuiListener(this), this);
+        Bukkit.getPluginManager().registerEvents(new BaltopGuiListener(this, baltopCommand), this);
         if (playerProfileStorage != null) {
             Bukkit.getPluginManager().registerEvents(new PlayerProfileListener(playerProfileStorage), this);
             for (Player player : Bukkit.getOnlinePlayers()) {
@@ -255,8 +277,26 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         }
     }
 
+    private void setupFloodgateCache() {
+        floodgateApi = null;
+        floodgateIsPlayerMethod = null;
+        if (Bukkit.getPluginManager().getPlugin("floodgate") == null) {
+            return;
+        }
+        try {
+            Class<?> apiClass = Class.forName("org.geysermc.floodgate.api.FloodgateApi");
+            floodgateApi = apiClass.getMethod("getInstance").invoke(null);
+            floodgateIsPlayerMethod = apiClass.getMethod("isFloodgatePlayer", UUID.class);
+        } catch (Throwable ex) {
+            getLogger().fine("Floodgate API was not available; Bedrock GUI handling will use Java defaults.");
+            floodgateApi = null;
+            floodgateIsPlayerMethod = null;
+        }
+    }
+
     public void reloadAndSyncConfig() {
-        syncConfigWithDefaults();
+        configMigrator.migrateConfig();
+        currencyManager.reload();
         if (balanceStorage != null) {
             balanceStorage.reloadSettings();
         }
@@ -271,57 +311,14 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         if (leaderboardExportService != null) {
             leaderboardExportService.reload();
         }
+        if (itemBalanceTracker != null) {
+            itemBalanceTracker.reloadSettings();
+        }
+        if (debugMetrics != null) {
+            debugMetrics.reload();
+        }
+        setupFloodgateCache();
         setupPlaceholderAPI();
-    }
-
-    private void syncConfigWithDefaults() {
-        saveDefaultConfig();
-        reloadConfig();
-
-        try (InputStream defaultStream = getResource("config.yml")) {
-            if (defaultStream == null) {
-                getLogger().warning("Default config.yml not found in plugin jar; skipping config sync.");
-                return;
-            }
-
-            YamlConfiguration defaults = YamlConfiguration.loadConfiguration(
-                    new InputStreamReader(defaultStream, StandardCharsets.UTF_8));
-            FileConfiguration config = getConfig();
-
-            boolean changed = mergeMissing(config, defaults);
-            if (changed) {
-                saveConfig();
-                reloadConfig();
-                getLogger().info("Added missing config options from defaults.");
-            }
-        } catch (Exception ex) {
-            getLogger().warning("Failed to sync config defaults: " + ex.getMessage());
-        }
-    }
-
-    private boolean mergeMissing(ConfigurationSection target, ConfigurationSection defaults) {
-        boolean changed = false;
-
-        for (String key : defaults.getKeys(false)) {
-            if (defaults.isConfigurationSection(key)) {
-                ConfigurationSection defaultChild = defaults.getConfigurationSection(key);
-                ConfigurationSection targetChild = target.getConfigurationSection(key);
-
-                if (targetChild == null) {
-                    targetChild = target.createSection(key);
-                    changed = true;
-                }
-
-                if (defaultChild != null) {
-                    changed |= mergeMissing(targetChild, defaultChild);
-                }
-            } else if (!target.isSet(key)) {
-                target.set(key, defaults.get(key));
-                changed = true;
-            }
-        }
-
-        return changed;
     }
 
     public static EnthusiaCurrencyPlugin getInstance() {
@@ -364,6 +361,14 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         return currencyAnalyticsStorage;
     }
 
+    public DebugMetrics getDebugMetrics() {
+        return debugMetrics;
+    }
+
+    public ItemBalanceTracker getItemBalanceTracker() {
+        return itemBalanceTracker;
+    }
+
     public boolean isInBaltopTop(UUID uuid, int top) {
         return baltopTracker != null && baltopTracker.isInTop(uuid, top);
     }
@@ -377,15 +382,11 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     }
 
     public boolean isBedrock(Player player) {
-        if (Bukkit.getPluginManager().getPlugin("floodgate") == null) {
+        if (floodgateApi == null || floodgateIsPlayerMethod == null) {
             return false;
         }
         try {
-            Class<?> apiClass = Class.forName("org.geysermc.floodgate.api.FloodgateApi");
-            Object api = apiClass.getMethod("getInstance").invoke(null);
-            Object result = apiClass
-                    .getMethod("isFloodgatePlayer", java.util.UUID.class)
-                    .invoke(api, player.getUniqueId());
+            Object result = floodgateIsPlayerMethod.invoke(floodgateApi, player.getUniqueId());
             if (result instanceof Boolean) {
                 return (Boolean) result;
             }

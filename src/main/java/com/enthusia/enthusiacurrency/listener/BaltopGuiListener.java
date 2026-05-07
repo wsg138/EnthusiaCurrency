@@ -21,9 +21,11 @@ import java.util.UUID;
 public class BaltopGuiListener implements Listener {
 
     private final EnthusiaCurrencyPlugin plugin;
+    private final BaltopCommand baltopCommand;
 
-    public BaltopGuiListener(EnthusiaCurrencyPlugin plugin) {
+    public BaltopGuiListener(EnthusiaCurrencyPlugin plugin, BaltopCommand baltopCommand) {
         this.plugin = plugin;
+        this.baltopCommand = baltopCommand;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
@@ -74,8 +76,7 @@ public class BaltopGuiListener implements Listener {
         if (pageCount <= 0) pageCount = 1;
         if (newPage > pageCount) newPage = pageCount;
 
-        BaltopCommand cmd = new BaltopCommand(plugin);
-        cmd.openGui(player, entries, newPage);
+        baltopCommand.openGui(player, entries, newPage);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)

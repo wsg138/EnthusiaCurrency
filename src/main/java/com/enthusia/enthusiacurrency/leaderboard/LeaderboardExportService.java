@@ -73,9 +73,11 @@ public final class LeaderboardExportService {
 
     public void exportNow() {
         if (!isEnabled() || closed) {
+            plugin.getDebugMetrics().exportSkipped();
             return;
         }
 
+        plugin.getDebugMetrics().exportAttempt();
         dirty = false;
         Map<UUID, Long> balances = plugin.getCurrencyService().getBankSnapshot();
         Map<UUID, PlayerProfile> profiles = plugin.getPlayerProfileStorage().getAllProfilesSnapshot();
@@ -191,6 +193,7 @@ public final class LeaderboardExportService {
 
             uploadR2Exports(export, exportJson);
         } catch (Exception ex) {
+            plugin.getDebugMetrics().exportFailed();
             plugin.getLogger().warning("Failed to export public balance leaderboard: " + ex.getMessage());
         }
     }
@@ -202,6 +205,7 @@ public final class LeaderboardExportService {
 
         String boardKey = getR2BalanceKey();
         r2Uploader.uploadJson(boardKey, exportJson);
+        plugin.getDebugMetrics().exportUploaded();
 
         LeaderboardIndex index = new LeaderboardIndex(
                 export.generatedAt(),
@@ -218,6 +222,7 @@ public final class LeaderboardExportService {
                 ))
         );
         r2Uploader.uploadJson(getR2IndexKey(), gson.toJson(index));
+        plugin.getDebugMetrics().exportUploaded();
     }
 
     private String formatCurrencyText(long value, String currencySingular, String currencyPlural) {

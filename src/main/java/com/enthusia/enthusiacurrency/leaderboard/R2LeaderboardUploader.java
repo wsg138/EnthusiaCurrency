@@ -62,6 +62,7 @@ public final class R2LeaderboardUploader {
         try {
             putObject(settings, key, json);
         } catch (Exception ex) {
+            plugin.getDebugMetrics().r2Failure();
             plugin.getLogger().log(Level.WARNING, "Failed to upload leaderboard export to R2 key " + key + ": " + ex.getMessage(), ex);
         }
     }
