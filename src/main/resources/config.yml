@@ -44,7 +44,7 @@ leaderboards:
     interval-seconds: 60
     debounce-seconds: 10
     r2:
-      enabled: true
+      enabled: false
       endpoint: "https://83982f6d6277634f57d216e6a7f24125.r2.cloudflarestorage.com"
       bucket: "balance-leaderboard"
       index-key: "leaderboards/index.json"
