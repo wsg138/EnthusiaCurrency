@@ -86,7 +86,7 @@ public class TokenEconomy implements Economy {
     @Override
     public double getBalance(OfflinePlayer offlinePlayer) {
         return runSyncIfNeeded(() -> {
-            CurrencyService.BalanceView balanceView = plugin.getCurrencyService().getBalanceView(offlinePlayer);
+            CurrencyService.BalanceView balanceView = plugin.getCurrencyService().getCachedBalanceView(offlinePlayer);
             return (double) balanceView.total();
         });
     }
@@ -108,12 +108,12 @@ public class TokenEconomy implements Economy {
 
     @Override
     public boolean has(OfflinePlayer player, double amount) {
-        return getBalance(player) >= amount;
+        return getExactBalance(player) >= amount;
     }
 
     @Override
     public boolean has(String playerName, double amount) {
-        return getBalance(playerName) >= amount;
+        return getExactBalance(Bukkit.getOfflinePlayer(playerName)) >= amount;
     }
 
     @Override
@@ -281,6 +281,10 @@ public class TokenEconomy implements Economy {
 
     private EconomyResponse notImplemented() {
         return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank support disabled.");
+    }
+
+    private double getExactBalance(OfflinePlayer player) {
+        return runSyncIfNeeded(() -> (double) plugin.getCurrencyService().getBalanceView(player).total());
     }
 
     private <T> T runSyncIfNeeded(Callable<T> callable) {
