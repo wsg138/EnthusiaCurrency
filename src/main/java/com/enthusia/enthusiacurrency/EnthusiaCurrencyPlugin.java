@@ -17,6 +17,7 @@ import com.enthusia.enthusiacurrency.service.CurrencyService;
 import com.enthusia.enthusiacurrency.skin.SkinCache;
 import com.enthusia.enthusiacurrency.skin.SkinListener;
 import com.enthusia.enthusiacurrency.storage.BalanceStorage;
+import com.enthusia.enthusiacurrency.storage.OfflinePaymentNotificationStorage;
 import com.enthusia.enthusiacurrency.storage.PlayerProfileStorage;
 import com.enthusia.enthusiacurrency.util.CurrencyManager;
 import net.milkbowl.vault.economy.Economy;
@@ -41,6 +42,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     private TokenEconomy tokenEconomy;
     private BaltopTracker baltopTracker;
     private PlayerProfileStorage playerProfileStorage;
+    private OfflinePaymentNotificationStorage offlinePaymentNotificationStorage;
     private LeaderboardExportService leaderboardExportService;
     private CurrencyAnalyticsStorage currencyAnalyticsStorage;
     private LeaderboardPlaceholderCache leaderboardPlaceholderCache;
@@ -82,6 +84,16 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
             this.playerProfileStorage.load();
         } catch (IllegalStateException ex) {
             getLogger().severe("Failed to start player profile storage: " + ex.getMessage());
+            ex.printStackTrace();
+            Bukkit.getPluginManager().disablePlugin(this);
+            return;
+        }
+
+        this.offlinePaymentNotificationStorage = new OfflinePaymentNotificationStorage(this);
+        try {
+            this.offlinePaymentNotificationStorage.load();
+        } catch (IllegalStateException ex) {
+            getLogger().severe("Failed to start offline payment notification storage: " + ex.getMessage());
             ex.printStackTrace();
             Bukkit.getPluginManager().disablePlugin(this);
             return;
@@ -148,6 +160,9 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         }
         if (playerProfileStorage != null) {
             playerProfileStorage.close();
+        }
+        if (offlinePaymentNotificationStorage != null) {
+            offlinePaymentNotificationStorage.close();
         }
         if (skinCache != null) {
             skinCache.cancelScheduledSave();
@@ -253,7 +268,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     private void registerListeners() {
         Bukkit.getPluginManager().registerEvents(new BaltopGuiListener(this, baltopCommand), this);
         if (playerProfileStorage != null) {
-            Bukkit.getPluginManager().registerEvents(new PlayerProfileListener(playerProfileStorage), this);
+            Bukkit.getPluginManager().registerEvents(new PlayerProfileListener(playerProfileStorage, offlinePaymentNotificationStorage), this);
             for (Player player : Bukkit.getOnlinePlayers()) {
                 playerProfileStorage.recordOnlinePlayer(player);
             }
@@ -347,6 +362,10 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     public PlayerProfileStorage getPlayerProfileStorage() {
         return playerProfileStorage;
+    }
+
+    public OfflinePaymentNotificationStorage getOfflinePaymentNotificationStorage() {
+        return offlinePaymentNotificationStorage;
     }
 
     public LeaderboardExportService getLeaderboardExportService() {

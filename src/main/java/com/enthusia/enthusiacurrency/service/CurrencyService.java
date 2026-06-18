@@ -286,6 +286,14 @@ public class CurrencyService {
         }
 
         balanceStorage.deposit(target.getUniqueId(), amount);
+        if (!target.isOnline() && plugin.getOfflinePaymentNotificationStorage() != null) {
+            plugin.getOfflinePaymentNotificationStorage().record(
+                    target.getUniqueId(),
+                    sender.getUniqueId(),
+                    sender.getName(),
+                    amount
+            );
+        }
         Bukkit.getPluginManager().callEvent(new CurrencyPayEvent(sender.getUniqueId(), target.getUniqueId(), amount));
 
         long senderBalance = getBankBalance(sender.getUniqueId());

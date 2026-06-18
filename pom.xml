@@ -5,7 +5,7 @@
 
     <groupId>com.enthusia</groupId>
     <artifactId>enthusia-currency</artifactId>
-    <version>1.4.3</version>
+    <version>1.4.4</version>
     <name>EnthusiaCurrency</name>
 
     <properties>

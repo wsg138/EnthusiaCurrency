@@ -1,4 +1,4 @@
-config-version: 2
+config-version: 3
 
 currency:
   material: RAW_GOLD
@@ -125,6 +125,7 @@ messages:
 
   pay-success-sender: "&aYou paid &e%target% &e%symbol%%amount% %currency%&a."
   pay-success-target: "&aYou received &e%symbol%%amount% %currency% &afrom &e%sender%&a."
+  pay-received-offline: "&aWhile you were offline, &e%sender% &asent you &e%symbol%%amount% %currency%&a."
 
   balance-self: "&aYour balance: &e%symbol%%total% %currency_plural% &7(&fbank: &e%symbol%%bank%&7, items: &e%symbol%%items%&7)"
   balance-other: "&a%target%'s balance: &e%symbol%%total% %currency_plural% &7(&fbank: &e%symbol%%bank%&7, items: &e%symbol%%items%&7)"
