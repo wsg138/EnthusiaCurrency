@@ -5,6 +5,8 @@ import com.enthusia.enthusiacurrency.service.CurrencyService;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import org.bukkit.entity.Player;
 
+import java.util.Locale;
+
 public class EnthusiaCurrencyExpansion extends PlaceholderExpansion {
 
     private final EnthusiaCurrencyPlugin plugin;
@@ -39,7 +41,7 @@ public class EnthusiaCurrencyExpansion extends PlaceholderExpansion {
             return null;
         }
 
-        String lower = params.toLowerCase();
+        String lower = params.toLowerCase(Locale.ROOT);
         if (lower.startsWith("top_")) {
             LeaderboardPlaceholderCache cache = plugin.getLeaderboardPlaceholderCache();
             if (cache == null) {

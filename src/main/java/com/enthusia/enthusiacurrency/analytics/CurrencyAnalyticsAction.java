@@ -7,13 +7,13 @@ public enum CurrencyAnalyticsAction {
     PAY_FAILED("Payment Failed"),
     WITHDRAW_FAILED("Withdraw Failed");
 
-    private final String label;
+    private final String displayLabel;
 
     CurrencyAnalyticsAction(String label) {
-        this.label = label;
+        this.displayLabel = label;
     }
 
     public String label() {
-        return label;
+        return displayLabel;
     }
 }

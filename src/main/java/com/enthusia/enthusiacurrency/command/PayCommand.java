@@ -14,6 +14,7 @@ import org.bukkit.entity.Player;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.OptionalLong;
 
 public class PayCommand implements CommandExecutor, TabCompleter {
@@ -94,10 +95,10 @@ public class PayCommand implements CommandExecutor, TabCompleter {
             return Collections.emptyList();
         }
 
-        String prefix = args[0].toLowerCase();
+        String prefix = args[0].toLowerCase(Locale.ROOT);
         List<String> matches = new ArrayList<>();
         for (Player online : Bukkit.getOnlinePlayers()) {
-            if (online.getName().toLowerCase().startsWith(prefix)) {
+            if (online.getName().toLowerCase(Locale.ROOT).startsWith(prefix)) {
                 matches.add(online.getName());
             }
         }

@@ -18,15 +18,15 @@ public final class DebugMetrics {
     private final AtomicLong placeholderCachedReturns = new AtomicLong();
     private final AtomicLong baltopRefreshDurationMillis = new AtomicLong();
     private final AtomicLong baltopPlayersProcessed = new AtomicLong();
-    private final AtomicLong analyticsQueued = new AtomicLong();
-    private final AtomicLong analyticsFlushed = new AtomicLong();
-    private final AtomicLong analyticsFailed = new AtomicLong();
+    private final AtomicLong analyticsQueuedCount = new AtomicLong();
+    private final AtomicLong analyticsFlushedCount = new AtomicLong();
+    private final AtomicLong analyticsFailedCount = new AtomicLong();
     private final AtomicLong balanceDirtyMarks = new AtomicLong();
     private final AtomicLong balanceFlushDurationMillis = new AtomicLong();
     private final AtomicLong exportAttempts = new AtomicLong();
-    private final AtomicLong exportSkipped = new AtomicLong();
-    private final AtomicLong exportUploaded = new AtomicLong();
-    private final AtomicLong exportFailed = new AtomicLong();
+    private final AtomicLong exportSkippedCount = new AtomicLong();
+    private final AtomicLong exportUploadedCount = new AtomicLong();
+    private final AtomicLong exportFailedCount = new AtomicLong();
     private final AtomicLong r2Failures = new AtomicLong();
     private final AtomicLong skinCacheHits = new AtomicLong();
     private final AtomicLong skinCacheMisses = new AtomicLong();
@@ -87,15 +87,15 @@ public final class DebugMetrics {
     }
 
     public void analyticsQueued() {
-        analyticsQueued.incrementAndGet();
+        analyticsQueuedCount.incrementAndGet();
     }
 
     public void analyticsFlushed(long count) {
-        analyticsFlushed.addAndGet(count);
+        analyticsFlushedCount.addAndGet(count);
     }
 
     public void analyticsFailed() {
-        analyticsFailed.incrementAndGet();
+        analyticsFailedCount.incrementAndGet();
     }
 
     public void balanceDirtyMark() {
@@ -111,15 +111,15 @@ public final class DebugMetrics {
     }
 
     public void exportSkipped() {
-        exportSkipped.incrementAndGet();
+        exportSkippedCount.incrementAndGet();
     }
 
     public void exportUploaded() {
-        exportUploaded.incrementAndGet();
+        exportUploadedCount.incrementAndGet();
     }
 
     public void exportFailed() {
-        exportFailed.incrementAndGet();
+        exportFailedCount.incrementAndGet();
     }
 
     public void r2Failure() {
@@ -148,15 +148,15 @@ public final class DebugMetrics {
                 + ", placeholderCachedReturns=" + placeholderCachedReturns.getAndSet(0)
                 + ", baltopRefreshMillis=" + baltopRefreshDurationMillis.getAndSet(0)
                 + ", baltopPlayersProcessed=" + baltopPlayersProcessed.getAndSet(0)
-                + ", analyticsQueued=" + analyticsQueued.getAndSet(0)
-                + ", analyticsFlushed=" + analyticsFlushed.getAndSet(0)
-                + ", analyticsFailed=" + analyticsFailed.getAndSet(0)
+                + ", analyticsQueued=" + analyticsQueuedCount.getAndSet(0)
+                + ", analyticsFlushed=" + analyticsFlushedCount.getAndSet(0)
+                + ", analyticsFailed=" + analyticsFailedCount.getAndSet(0)
                 + ", balanceDirtyMarks=" + balanceDirtyMarks.getAndSet(0)
                 + ", balanceFlushMillis=" + balanceFlushDurationMillis.getAndSet(0)
                 + ", exportAttempts=" + exportAttempts.getAndSet(0)
-                + ", exportSkipped=" + exportSkipped.getAndSet(0)
-                + ", exportUploaded=" + exportUploaded.getAndSet(0)
-                + ", exportFailed=" + exportFailed.getAndSet(0)
+                + ", exportSkipped=" + exportSkippedCount.getAndSet(0)
+                + ", exportUploaded=" + exportUploadedCount.getAndSet(0)
+                + ", exportFailed=" + exportFailedCount.getAndSet(0)
                 + ", r2Failures=" + r2Failures.getAndSet(0)
                 + ", skinCacheHits=" + skinCacheHits.getAndSet(0)
                 + ", skinCacheMisses=" + skinCacheMisses.getAndSet(0)

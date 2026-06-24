@@ -7,6 +7,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -95,7 +96,7 @@ public class SqliteBalanceRepository implements BalanceRepository {
             statement.execute("ALTER TABLE balances ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
         } catch (Exception ex) {
             String message = ex.getMessage();
-            if (message == null || !message.toLowerCase().contains("duplicate column")) {
+            if (message == null || !message.toLowerCase(Locale.ROOT).contains("duplicate column")) {
                 throw ex;
             }
         }
