@@ -4,7 +4,6 @@ import com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin;
 import com.enthusia.enthusiacurrency.service.CurrencyAmountParser;
 import com.enthusia.enthusiacurrency.service.CurrencyService;
 import com.enthusia.enthusiacurrency.storage.BalanceStorage;
-import com.enthusia.enthusiacurrency.util.CurrencyManager;
 import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
 import org.bukkit.Bukkit;
@@ -17,14 +16,16 @@ import java.util.concurrent.Callable;
 
 public class TokenEconomy implements Economy {
 
+    private static final String INVALID_AMOUNT = "Invalid amount.";
+    private static final String NOT_ENOUGH_FUNDS = "Not enough funds.";
+    private static final String INSUFFICIENT_REASON = "insufficient";
+
     private final EnthusiaCurrencyPlugin plugin;
     private final BalanceStorage storage;
-    private final CurrencyManager currencyManager;
 
-    public TokenEconomy(EnthusiaCurrencyPlugin plugin, BalanceStorage storage, CurrencyManager currencyManager) {
+    public TokenEconomy(EnthusiaCurrencyPlugin plugin, BalanceStorage storage, com.enthusia.enthusiacurrency.util.CurrencyManager currencyManager) {
         this.plugin = plugin;
         this.storage = storage;
-        this.currencyManager = currencyManager;
     }
 
     @Override
@@ -130,15 +131,13 @@ public class TokenEconomy implements Economy {
     public EconomyResponse withdrawPlayer(OfflinePlayer offlinePlayer, double amount) {
         OptionalLong normalized = normalizeAmount(amount);
         if (normalized.isEmpty()) {
-            return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, "Invalid amount.");
+            return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, INVALID_AMOUNT);
         }
 
         return runSyncIfNeeded(() -> {
             CurrencyService.VaultWithdrawResult result = plugin.getCurrencyService().withdrawTotal(offlinePlayer, normalized.getAsLong());
             if (!result.success()) {
-                String message = "insufficient".equals(result.failureReason())
-                        ? "Not enough funds."
-                        : "Invalid amount.";
+                String message = INSUFFICIENT_REASON.equals(result.failureReason()) ? NOT_ENOUGH_FUNDS : INVALID_AMOUNT;
                 return new EconomyResponse(0, result.newBalance(), EconomyResponse.ResponseType.FAILURE, message);
             }
 
@@ -166,7 +165,7 @@ public class TokenEconomy implements Economy {
     public EconomyResponse depositPlayer(OfflinePlayer offlinePlayer, double amount) {
         OptionalLong normalized = normalizeAmount(amount);
         if (normalized.isEmpty()) {
-            return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, "Invalid amount.");
+            return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, INVALID_AMOUNT);
         }
 
         try {
@@ -174,7 +173,7 @@ public class TokenEconomy implements Economy {
             long newBalance = plugin.getCurrencyService().depositBank(offlinePlayer.getUniqueId(), normalized.getAsLong());
             return new EconomyResponse(amount, newBalance, EconomyResponse.ResponseType.SUCCESS, null);
         } catch (IllegalArgumentException ex) {
-            return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, "Invalid amount.");
+            return new EconomyResponse(0, getBalance(offlinePlayer), EconomyResponse.ResponseType.FAILURE, INVALID_AMOUNT);
         }
     }
 
@@ -292,14 +291,21 @@ public class TokenEconomy implements Economy {
             try {
                 return callable.call();
             } catch (Exception ex) {
-                throw new RuntimeException(ex);
+                throw new EconomyOperationException(ex);
             }
         }
 
         try {
             return Bukkit.getScheduler().callSyncMethod(plugin, callable).get();
         } catch (Exception ex) {
-            throw new RuntimeException(ex);
+            throw new EconomyOperationException(ex);
+        }
+    }
+
+    private static final class EconomyOperationException extends RuntimeException {
+
+        private EconomyOperationException(Throwable cause) {
+            super(cause);
         }
     }
 }

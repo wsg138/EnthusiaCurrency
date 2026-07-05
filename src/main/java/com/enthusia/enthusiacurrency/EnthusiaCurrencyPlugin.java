@@ -35,6 +35,8 @@ import java.util.UUID;
 
 public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
+    private static final double SINGULAR_EPSILON = 0.0001D;
+
     private static EnthusiaCurrencyPlugin instance;
 
     private BalanceStorage balanceStorage;
@@ -150,6 +152,13 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         teardownPlaceholderAPI();
+        stopRuntimeServices();
+        closeStorage();
+        saveSkins();
+        getLogger().info("EnthusiaCurrency disabled.");
+    }
+
+    private void stopRuntimeServices() {
         if (baltopTracker != null) {
             baltopTracker.stop();
         }
@@ -165,6 +174,9 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         if (tokenEconomy != null) {
             Bukkit.getServicesManager().unregister(Economy.class, tokenEconomy);
         }
+    }
+
+    private void closeStorage() {
         if (currencyAnalyticsStorage != null) {
             currencyAnalyticsStorage.close();
         }
@@ -177,11 +189,13 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         if (offlinePaymentNotificationStorage != null) {
             offlinePaymentNotificationStorage.close();
         }
+    }
+
+    private void saveSkins() {
         if (skinCache != null) {
             skinCache.cancelScheduledSave();
             skinCache.save();
         }
-        getLogger().info("EnthusiaCurrency disabled.");
     }
 
     private void setupVault() {
@@ -454,7 +468,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     }
 
     public String getCurrencyName(double amount) {
-        if (Math.abs(amount - 1.0) < 0.0001D) {
+        if (Math.abs(amount - 1.0D) < SINGULAR_EPSILON) {
             return getCurrencySingular();
         }
         return getCurrencyPlural();

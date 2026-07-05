@@ -19,6 +19,14 @@ import java.util.OptionalLong;
 
 public class PayCommand implements CommandExecutor, TabCompleter {
 
+    private static final int PAY_ARGUMENTS = 2;
+    private static final int TARGET_ARGUMENT = 0;
+    private static final int AMOUNT_ARGUMENT = 1;
+    private static final int TAB_TARGET_ARGUMENTS = 1;
+    private static final String SELF_REASON = "self";
+    private static final String OVERFLOW_REASON = "overflow";
+    private static final String UNKNOWN_PLAYER = "Unknown";
+
     private final EnthusiaCurrencyPlugin plugin;
 
     public PayCommand(EnthusiaCurrencyPlugin plugin) {
@@ -32,19 +40,18 @@ public class PayCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        if (args.length != 2) {
+        if (args.length != PAY_ARGUMENTS) {
             plugin.sendMsg(player, "invalid-amount");
             return true;
         }
 
-        OfflinePlayer target = Bukkit.getOfflinePlayer(args[0]);
-        if ((target.getName() == null || !target.hasPlayedBefore()) && !target.isOnline()) {
+        OfflinePlayer target = Bukkit.getOfflinePlayer(args[TARGET_ARGUMENT]);
+        if (unknownTarget(target)) {
             plugin.sendMsg(player, "player-not-found");
             return true;
         }
 
-        boolean allowDecimals = plugin.getConfig().getBoolean("economy.allow-decimals", false);
-        OptionalLong parsedAmount = CurrencyAmountParser.parseUserAmount(args[1], allowDecimals);
+        OptionalLong parsedAmount = parseAmount(args[AMOUNT_ARGUMENT]);
         if (parsedAmount.isEmpty()) {
             plugin.sendMsg(player, "invalid-amount");
             return true;
@@ -52,26 +59,44 @@ public class PayCommand implements CommandExecutor, TabCompleter {
 
         CurrencyService.PayResult result = plugin.getCurrencyService().pay(player, target, parsedAmount.getAsLong());
         if (!result.success()) {
-            if ("self".equals(result.failureReason())) {
-                plugin.sendMsg(player, "self-pay");
-                return true;
-            }
-            if ("overflow".equals(result.failureReason())) {
-                plugin.sendMsg(player, "invalid-amount");
-                return true;
-            }
-
-            CurrencyService.BalanceView senderView = plugin.getCurrencyService().getBalanceView(player);
-            String message = plugin.msgNoPrefix("not-enough-funds")
-                    .replace("%have%", String.valueOf(senderView.total()))
-                    .replace("%symbol%", plugin.getCurrencySymbol())
-                    .replace("%currency%", plugin.getCurrencyName(senderView.total()));
-            player.sendMessage(plugin.getPrefix() + message);
+            sendFailure(player, result);
             return true;
         }
 
+        sendSuccess(player, target, result);
+        return true;
+    }
+
+    private boolean unknownTarget(OfflinePlayer target) {
+        return (target.getName() == null || !target.hasPlayedBefore()) && !target.isOnline();
+    }
+
+    private OptionalLong parseAmount(String rawAmount) {
+        boolean allowDecimals = plugin.getConfig().getBoolean("economy.allow-decimals", false);
+        return CurrencyAmountParser.parseUserAmount(rawAmount, allowDecimals);
+    }
+
+    private void sendFailure(Player player, CurrencyService.PayResult result) {
+        if (SELF_REASON.equals(result.failureReason())) {
+            plugin.sendMsg(player, "self-pay");
+            return;
+        }
+        if (OVERFLOW_REASON.equals(result.failureReason())) {
+            plugin.sendMsg(player, "invalid-amount");
+            return;
+        }
+
+        CurrencyService.BalanceView senderView = plugin.getCurrencyService().getBalanceView(player);
+        String message = plugin.msgNoPrefix("not-enough-funds")
+                .replace("%have%", String.valueOf(senderView.total()))
+                .replace("%symbol%", plugin.getCurrencySymbol())
+                .replace("%currency%", plugin.getCurrencyName(senderView.total()));
+        player.sendMessage(plugin.getPrefix() + message);
+    }
+
+    private void sendSuccess(Player player, OfflinePlayer target, CurrencyService.PayResult result) {
         String senderMessage = plugin.msgNoPrefix("pay-success-sender")
-                .replace("%target%", target.getName() == null ? "Unknown" : target.getName())
+                .replace("%target%", target.getName() == null ? UNKNOWN_PLAYER : target.getName())
                 .replace("%amount%", String.valueOf(result.amount()))
                 .replace("%symbol%", plugin.getCurrencySymbol())
                 .replace("%currency%", plugin.getCurrencyName(result.amount()));
@@ -85,13 +110,11 @@ public class PayCommand implements CommandExecutor, TabCompleter {
                     .replace("%currency%", plugin.getCurrencyName(result.amount()));
             target.getPlayer().sendMessage(plugin.getPrefix() + targetMessage);
         }
-
-        return true;
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (!(sender instanceof Player) || args.length != 1) {
+        if (!(sender instanceof Player) || args.length != TAB_TARGET_ARGUMENTS) {
             return Collections.emptyList();
         }
 
