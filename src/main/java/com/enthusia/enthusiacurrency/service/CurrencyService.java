@@ -29,6 +29,9 @@ public class CurrencyService {
     private record WithdrawalStacks(boolean canUseBlocks, long blocks, long items) {
     }
 
+    private record PayDebitResult(boolean success, long senderBalance) {
+    }
+
     private static final long ITEM_BALANCE_CACHE_TTL_NANOS = 2_000_000_000L;
     private static final String REASON_OVERFLOW = "overflow";
     private static final String REASON_INVALID = "invalid";
@@ -216,53 +219,73 @@ public class CurrencyService {
         plugin.getPlayerProfileStorage().recordKnownPlayer(target);
         if (target.getUniqueId().equals(sender.getUniqueId())) {
             Bukkit.getPluginManager().callEvent(new CurrencyPaySelfAttemptEvent(sender.getUniqueId()));
-            recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), "self");
-            return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), "self");
+            return failPay(sender, target, amount, getBankBalance(sender.getUniqueId()), "self");
         }
 
         BalanceView senderView = getBalanceView(sender);
         if (amount <= 0 || senderView.total() < amount) {
-            recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, Math.max(0L, amount), senderView.bank(), REASON_INSUFFICIENT);
-            return new PayResult(false, 0L, senderView.bank(), REASON_INSUFFICIENT);
+            return failPay(sender, target, Math.max(0L, amount), senderView.bank(), REASON_INSUFFICIENT);
         }
         if (balanceStorage.wouldOverflow(target.getUniqueId(), amount)) {
-            recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), REASON_OVERFLOW);
-            return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), REASON_OVERFLOW);
+            return failPay(sender, target, amount, getBankBalance(sender.getUniqueId()), REASON_OVERFLOW);
         }
 
+        PayDebitResult debit = debitSenderForPay(sender, target, amount);
+        if (!debit.success()) {
+            return new PayResult(false, 0L, debit.senderBalance(), REASON_INSUFFICIENT);
+        }
+        completePay(sender, target, amount, debit.senderBalance());
+        return new PayResult(true, amount, debit.senderBalance(), null);
+    }
+
+    private PayResult failPay(Player sender, OfflinePlayer target, long analyticsAmount, long senderBalance, String reason) {
+        recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, analyticsAmount, senderBalance, reason);
+        return new PayResult(false, 0L, senderBalance, reason);
+    }
+
+    private PayDebitResult debitSenderForPay(Player sender, OfflinePlayer target, long amount) {
         long remaining = amount;
         long totalRefund = 0L;
-
         long bankAvailable = getBankBalance(sender.getUniqueId());
         long fromBank = Math.min(bankAvailable, remaining);
         if (fromBank > 0) {
             if (!balanceStorage.withdraw(sender.getUniqueId(), fromBank)) {
                 recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), REASON_INSUFFICIENT);
-                return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), REASON_INSUFFICIENT);
+                return new PayDebitResult(false, getBankBalance(sender.getUniqueId()));
             }
             remaining -= fromBank;
             totalRefund += fromBank;
         }
+        return debitPayItems(sender, target, amount, remaining, totalRefund);
+    }
 
-        if (remaining > 0) {
-            int removed = CurrencyUtils.removeCurrencyFromPlayer(currencyManager, sender, Math.toIntExact(remaining));
-            if (removed < remaining) {
-                if (totalRefund > 0) {
-                    balanceStorage.deposit(sender.getUniqueId(), totalRefund);
-                }
-                invalidateItemBalance(sender.getUniqueId());
-                refreshTrackedItems(sender, "pay-failed-refund");
-                recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), REASON_INSUFFICIENT);
-                return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), REASON_INSUFFICIENT);
-            }
-
-            if (removed > remaining) {
-                balanceStorage.deposit(sender.getUniqueId(), removed - remaining);
-            }
-            invalidateItemBalance(sender.getUniqueId());
-            refreshTrackedItems(sender, "pay");
+    private PayDebitResult debitPayItems(Player sender, OfflinePlayer target, long amount, long remaining, long totalRefund) {
+        if (remaining <= 0) {
+            return new PayDebitResult(true, getBankBalance(sender.getUniqueId()));
         }
+        int removed = CurrencyUtils.removeCurrencyFromPlayer(currencyManager, sender, Math.toIntExact(remaining));
+        if (removed < remaining) {
+            refundFailedPay(sender, totalRefund);
+            recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), REASON_INSUFFICIENT);
+            return new PayDebitResult(false, getBankBalance(sender.getUniqueId()));
+        }
+        if (removed > remaining) {
+            balanceStorage.deposit(sender.getUniqueId(), removed - remaining);
+        }
+        invalidateItemBalance(sender.getUniqueId());
+        refreshTrackedItems(sender, "pay");
+        return new PayDebitResult(true, getBankBalance(sender.getUniqueId()));
+    }
 
+    private void refundFailedPay(Player sender, long totalRefund) {
+        if (totalRefund > 0) {
+            balanceStorage.deposit(sender.getUniqueId(), totalRefund);
+        }
+        invalidateItemBalance(sender.getUniqueId());
+        refreshTrackedItems(sender, "pay-failed-refund");
+    }
+
+    private void completePay(Player sender, OfflinePlayer target, long amount, long senderBalance) {
         balanceStorage.deposit(target.getUniqueId(), amount);
         if (!target.isOnline() && plugin.getOfflinePaymentNotificationStorage() != null) {
             plugin.getOfflinePaymentNotificationStorage().record(
@@ -274,14 +297,12 @@ public class CurrencyService {
         }
         Bukkit.getPluginManager().callEvent(new CurrencyPayEvent(sender.getUniqueId(), target.getUniqueId(), amount));
 
-        long senderBalance = getBankBalance(sender.getUniqueId());
         if (senderBalance <= 0) {
             Bukkit.getPluginManager().callEvent(new CurrencyBalanceZeroEvent(sender.getUniqueId()));
         }
 
         recordAnalytics(CurrencyAnalyticsAction.PAY, true, sender, target, amount, senderBalance, null);
         markLeaderboardDirty();
-        return new PayResult(true, amount, senderBalance, null);
     }
 
     public long depositBank(UUID playerId, long amount) {
