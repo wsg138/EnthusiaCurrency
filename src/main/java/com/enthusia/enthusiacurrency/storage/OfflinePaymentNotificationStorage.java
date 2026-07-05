@@ -17,6 +17,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
+@SuppressWarnings("PMD.DoNotUseThreads")
 public final class OfflinePaymentNotificationStorage {
 
     private static final String CREATE_TABLE_SQL = """

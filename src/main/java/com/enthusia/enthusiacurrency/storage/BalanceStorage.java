@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
+@SuppressWarnings("PMD.DoNotUseThreads")
 public class BalanceStorage {
 
     private record CachedBalance(long amount, long version) {

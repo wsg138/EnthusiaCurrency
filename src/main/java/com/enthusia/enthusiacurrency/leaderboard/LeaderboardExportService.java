@@ -25,6 +25,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
+@SuppressWarnings("PMD.DoNotUseThreads")
 public final class LeaderboardExportService {
 
     private static final String DEFAULT_BOARD_ID = "balance-active-all";

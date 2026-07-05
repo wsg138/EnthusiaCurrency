@@ -11,12 +11,11 @@ import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.EnumMap;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class LeaderboardPlaceholderCache {
 
@@ -29,14 +28,20 @@ public final class LeaderboardPlaceholderCache {
     private record Entry(UUID uuid, String name, long value) {
     }
 
+    private static final int MIN_RANK = 1;
+    private static final int MAX_CONFIGURED_RANK = 100;
+    private static final long MIN_LEADERBOARD_VALUE = 1L;
+    private static final String FALLBACK_NOT_AVAILABLE = "N/A";
+
     private final EnthusiaCurrencyPlugin plugin;
     private final DecimalFormat integerFormat = new DecimalFormat("#,###", DecimalFormatSymbols.getInstance(Locale.US));
-    private final Map<LeaderboardType, List<Entry>> cachedEntries = new EnumMap<>(LeaderboardType.class);
+    private final Map<LeaderboardType, List<Entry>> cachedEntries = new ConcurrentHashMap<>();
+    private final Object lifecycleLock = new Object();
 
     private volatile int refreshTaskId = -1;
-    private volatile int maxRank = 100;
+    private volatile int maxRank = MAX_CONFIGURED_RANK;
     private volatile long refreshIntervalSeconds = 30L;
-    private volatile String missingFallback = "N/A";
+    private volatile String missingFallback = FALLBACK_NOT_AVAILABLE;
 
     public LeaderboardPlaceholderCache(EnthusiaCurrencyPlugin plugin) {
         this.plugin = plugin;
@@ -45,21 +50,29 @@ public final class LeaderboardPlaceholderCache {
         }
     }
 
-    public synchronized void start() {
-        stop();
-        refreshNow();
+    public void start() {
+        synchronized (lifecycleLock) {
+            stopTask();
+            refreshNow();
 
-        long intervalTicks = Math.max(10L, refreshIntervalSeconds) * 20L;
-        refreshTaskId = Bukkit.getScheduler()
-                .runTaskTimer(plugin, this::refreshNow, intervalTicks, intervalTicks)
-                .getTaskId();
+            long intervalTicks = Math.max(10L, refreshIntervalSeconds) * 20L;
+            refreshTaskId = Bukkit.getScheduler()
+                    .runTaskTimer(plugin, this::refreshNow, intervalTicks, intervalTicks)
+                    .getTaskId();
+        }
     }
 
-    public synchronized void reload() {
+    public void reload() {
         start();
     }
 
-    public synchronized void stop() {
+    public void stop() {
+        synchronized (lifecycleLock) {
+            stopTask();
+        }
+    }
+
+    private void stopTask() {
         if (refreshTaskId != -1) {
             Bukkit.getScheduler().cancelTask(refreshTaskId);
             refreshTaskId = -1;
@@ -67,23 +80,37 @@ public final class LeaderboardPlaceholderCache {
     }
 
     public String resolve(String typeName, int rank, String fieldName) {
-        if (rank < 1 || rank > maxRank) {
+        if (rank < MIN_RANK || rank > maxRank) {
             return missingFallback;
         }
 
-        LeaderboardType type;
-        try {
-            type = LeaderboardType.valueOf(typeName.toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException ex) {
+        LeaderboardType type = parseType(typeName);
+        if (type == null) {
             return missingFallback;
         }
 
         List<Entry> entries = cachedEntries.getOrDefault(type, List.of());
-        Entry entry = rank <= entries.size() ? entries.get(rank - 1) : null;
+        Entry entry = entryAtRank(entries, rank);
         if (entry == null) {
             return missingFallback;
         }
 
+        return resolveField(entry, fieldName);
+    }
+
+    private LeaderboardType parseType(String typeName) {
+        try {
+            return LeaderboardType.valueOf(typeName.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    private Entry entryAtRank(List<Entry> entries, int rank) {
+        return rank <= entries.size() ? entries.get(rank - 1) : null;
+    }
+
+    private String resolveField(Entry entry, String fieldName) {
         return switch (fieldName.toLowerCase(Locale.ROOT)) {
             case "name" -> entry.name().isBlank() ? missingFallback : entry.name();
             case "uuid" -> entry.uuid().toString();
@@ -101,10 +128,10 @@ public final class LeaderboardPlaceholderCache {
                         plugin.getConfig().getLong("placeholderapi.leaderboard-refresh-seconds", 30L)
                 )
         ));
-        maxRank = clampMaxRank(plugin.getConfig().getInt("placeholderapi.leaderboard-max-rank", 100));
+        maxRank = clampMaxRank(plugin.getConfig().getInt("placeholderapi.leaderboard-max-rank", MAX_CONFIGURED_RANK));
 
-        String fallback = plugin.getConfig().getString("placeholderapi.leaderboard-missing-fallback", "N/A");
-        missingFallback = fallback == null ? "N/A" : fallback;
+        String fallback = plugin.getConfig().getString("placeholderapi.leaderboard-missing-fallback", FALLBACK_NOT_AVAILABLE);
+        missingFallback = fallback == null ? FALLBACK_NOT_AVAILABLE : fallback;
     }
 
     private void refreshNow() {
@@ -134,7 +161,7 @@ public final class LeaderboardPlaceholderCache {
     }
 
     private List<Entry> buildBankEntries() {
-        Map<UUID, Long> snapshot = new HashMap<>(plugin.getCurrencyService().getBankSnapshot());
+        Map<UUID, Long> snapshot = new ConcurrentHashMap<>(plugin.getCurrencyService().getBankSnapshot());
         Map<UUID, String> names = snapshotNames();
 
         List<Entry> entries = snapshot.entrySet().stream()
@@ -159,7 +186,7 @@ public final class LeaderboardPlaceholderCache {
 
         for (ItemBalanceSnapshot snapshot : plugin.getItemBalanceTracker().getSnapshots().values()) {
             long value = snapshot.totalItemCurrency();
-            if (value <= 0L) {
+            if (value < MIN_LEADERBOARD_VALUE) {
                 continue;
             }
 
@@ -178,7 +205,7 @@ public final class LeaderboardPlaceholderCache {
     }
 
     private Map<UUID, String> snapshotNames() {
-        Map<UUID, String> names = new HashMap<>();
+        Map<UUID, String> names = new ConcurrentHashMap<>();
         for (PlayerProfile profile : plugin.getPlayerProfileStorage().getAllProfilesSnapshot().values()) {
             if (profile == null || profile.uuid() == null) {
                 continue;
@@ -236,9 +263,9 @@ public final class LeaderboardPlaceholderCache {
     }
 
     private int clampMaxRank(int configured) {
-        if (configured < 1) {
-            return 1;
+        if (configured < MIN_RANK) {
+            return MIN_RANK;
         }
-        return Math.min(100, configured);
+        return Math.min(MAX_CONFIGURED_RANK, configured);
     }
 }

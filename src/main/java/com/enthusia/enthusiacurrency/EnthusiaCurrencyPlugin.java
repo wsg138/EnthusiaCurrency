@@ -30,6 +30,7 @@ import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.lang.reflect.Method;
+import java.util.Optional;
 import java.util.UUID;
 
 public class EnthusiaCurrencyPlugin extends JavaPlugin {
@@ -45,21 +46,38 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     private OfflinePaymentNotificationStorage offlinePaymentNotificationStorage;
     private LeaderboardExportService leaderboardExportService;
     private CurrencyAnalyticsStorage currencyAnalyticsStorage;
-    private LeaderboardPlaceholderCache leaderboardPlaceholderCache;
-    private EnthusiaCurrencyExpansion placeholderExpansion;
+    private Optional<LeaderboardPlaceholderCache> leaderboardPlaceholderCache = Optional.empty();
+    private Optional<EnthusiaCurrencyExpansion> placeholderExpansion = Optional.empty();
 
     private SkinCache skinCache;
     private ConfigMigrator configMigrator;
     private DebugMetrics debugMetrics;
     private ItemBalanceTracker itemBalanceTracker;
     private BaltopCommand baltopCommand;
-    private Object floodgateApi;
-    private Method floodgateIsPlayerMethod;
+    private FloodgateSupport floodgateSupport = FloodgateSupport.unavailable();
 
     @Override
     public void onEnable() {
         instance = this;
 
+        setupConfiguration();
+        if (!startStorage()) {
+            return;
+        }
+
+        this.currencyService = new CurrencyService(this, balanceStorage, currencyManager);
+        startRuntimeServices();
+        setupVault();
+        registerCommands();
+        setupPlaceholderAPI();
+        registerListeners();
+        this.leaderboardExportService.start();
+        setupPlanIntegration();
+
+        getLogger().info("EnthusiaCurrency enabled.");
+    }
+
+    private void setupConfiguration() {
         this.configMigrator = new ConfigMigrator(this);
         this.configMigrator.migrateConfig();
         this.debugMetrics = new DebugMetrics(this);
@@ -67,7 +85,9 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
         this.currencyManager = new CurrencyManager(this);
         this.currencyManager.reload();
+    }
 
+    private boolean startStorage() {
         this.balanceStorage = new BalanceStorage(this);
         try {
             this.balanceStorage.load();
@@ -75,9 +95,8 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
             getLogger().severe("Failed to start balance storage: " + ex.getMessage());
             ex.printStackTrace();
             Bukkit.getPluginManager().disablePlugin(this);
-            return;
+            return false;
         }
-        this.currencyService = new CurrencyService(this, balanceStorage, currencyManager);
 
         this.playerProfileStorage = new PlayerProfileStorage(this);
         try {
@@ -86,7 +105,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
             getLogger().severe("Failed to start player profile storage: " + ex.getMessage());
             ex.printStackTrace();
             Bukkit.getPluginManager().disablePlugin(this);
-            return;
+            return false;
         }
 
         this.offlinePaymentNotificationStorage = new OfflinePaymentNotificationStorage(this);
@@ -96,7 +115,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
             getLogger().severe("Failed to start offline payment notification storage: " + ex.getMessage());
             ex.printStackTrace();
             Bukkit.getPluginManager().disablePlugin(this);
-            return;
+            return false;
         }
 
         this.currencyAnalyticsStorage = new CurrencyAnalyticsStorage(this);
@@ -106,9 +125,12 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
             getLogger().severe("Failed to start currency analytics storage: " + ex.getMessage());
             ex.printStackTrace();
             Bukkit.getPluginManager().disablePlugin(this);
-            return;
+            return false;
         }
+        return true;
+    }
 
+    private void startRuntimeServices() {
         this.baltopTracker = new BaltopTracker(this);
         this.baltopTracker.initializeSnapshot();
         this.baltopTracker.start();
@@ -123,15 +145,6 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         this.itemBalanceTracker.start();
         this.baltopTracker.refreshTop3();
         setupFloodgateCache();
-
-        setupVault();
-        registerCommands();
-        setupPlaceholderAPI();
-        registerListeners();
-        this.leaderboardExportService.start();
-        setupPlanIntegration();
-
-        getLogger().info("EnthusiaCurrency enabled.");
     }
 
     @Override
@@ -200,33 +213,35 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         }
 
         try {
-            leaderboardPlaceholderCache = new LeaderboardPlaceholderCache(this);
-            leaderboardPlaceholderCache.start();
+            LeaderboardPlaceholderCache cache = new LeaderboardPlaceholderCache(this);
+            leaderboardPlaceholderCache = Optional.of(cache);
+            cache.start();
 
-            placeholderExpansion = new EnthusiaCurrencyExpansion(this);
-            if (placeholderExpansion.register()) {
+            EnthusiaCurrencyExpansion expansion = new EnthusiaCurrencyExpansion(this);
+            if (expansion.register()) {
+                placeholderExpansion = Optional.of(expansion);
                 getLogger().info("PlaceholderAPI found, registered EnthusiaCurrency placeholders.");
             } else {
                 getLogger().warning("Failed to register PlaceholderAPI expansion.");
                 teardownPlaceholderAPI();
             }
-        } catch (Throwable ex) {
+        } catch (Exception | LinkageError ex) {
             getLogger().warning("Failed to initialize PlaceholderAPI support: " + ex.getMessage());
             teardownPlaceholderAPI();
         }
     }
 
     private void teardownPlaceholderAPI() {
-        if (placeholderExpansion != null) {
-            try {
-                placeholderExpansion.unregister();
-            } catch (Throwable ignored) {
-            }
-            placeholderExpansion = null;
-        }
-        if (leaderboardPlaceholderCache != null) {
-            leaderboardPlaceholderCache.stop();
-            leaderboardPlaceholderCache = null;
+        placeholderExpansion.ifPresent(this::unregisterPlaceholderExpansion);
+        placeholderExpansion = Optional.empty();
+        leaderboardPlaceholderCache.ifPresent(LeaderboardPlaceholderCache::stop);
+        leaderboardPlaceholderCache = Optional.empty();
+    }
+
+    private void unregisterPlaceholderExpansion(EnthusiaCurrencyExpansion expansion) {
+        try {
+            expansion.unregister();
+        } catch (Exception | LinkageError ignored) {
         }
     }
 
@@ -287,25 +302,23 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
             new PlanIntegrationHook(this).hookIntoPlan();
         } catch (NoClassDefFoundError ex) {
             getLogger().fine("Plan API was not available; skipping Plan integration.");
-        } catch (Throwable ex) {
+        } catch (RuntimeException | LinkageError ex) {
             getLogger().warning("Failed to register Plan integration: " + ex.getMessage());
         }
     }
 
     private void setupFloodgateCache() {
-        floodgateApi = null;
-        floodgateIsPlayerMethod = null;
+        floodgateSupport = FloodgateSupport.unavailable();
         if (Bukkit.getPluginManager().getPlugin("floodgate") == null) {
             return;
         }
         try {
             Class<?> apiClass = Class.forName("org.geysermc.floodgate.api.FloodgateApi");
-            floodgateApi = apiClass.getMethod("getInstance").invoke(null);
-            floodgateIsPlayerMethod = apiClass.getMethod("isFloodgatePlayer", UUID.class);
-        } catch (Throwable ex) {
+            Object api = apiClass.getMethod("getInstance").invoke(null);
+            Method isPlayerMethod = apiClass.getMethod("isFloodgatePlayer", UUID.class);
+            floodgateSupport = new FloodgateSupport(api, isPlayerMethod);
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ex) {
             getLogger().fine("Floodgate API was not available; Bedrock GUI handling will use Java defaults.");
-            floodgateApi = null;
-            floodgateIsPlayerMethod = null;
         }
     }
 
@@ -373,7 +386,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     }
 
     public LeaderboardPlaceholderCache getLeaderboardPlaceholderCache() {
-        return leaderboardPlaceholderCache;
+        return leaderboardPlaceholderCache.orElse(null);
     }
 
     public CurrencyAnalyticsStorage getCurrencyAnalyticsStorage() {
@@ -401,15 +414,15 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     }
 
     public boolean isBedrock(Player player) {
-        if (floodgateApi == null || floodgateIsPlayerMethod == null) {
+        if (!floodgateSupport.isAvailable()) {
             return false;
         }
         try {
-            Object result = floodgateIsPlayerMethod.invoke(floodgateApi, player.getUniqueId());
+            Object result = floodgateSupport.isPlayerMethod().invoke(floodgateSupport.api(), player.getUniqueId());
             if (result instanceof Boolean) {
                 return (Boolean) result;
             }
-        } catch (Throwable ignored) {
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
         }
         return false;
     }
@@ -441,7 +454,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     }
 
     public String getCurrencyName(double amount) {
-        if (Math.abs(amount - 1.0) < 0.0001) {
+        if (Math.abs(amount - 1.0) < 0.0001D) {
             return getCurrencySingular();
         }
         return getCurrencyPlural();
@@ -449,5 +462,16 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     public String getCurrencySymbol() {
         return getConfig().getString("economy.currency-symbol", "$");
+    }
+
+    private record FloodgateSupport(Object api, Method isPlayerMethod) {
+
+        private static FloodgateSupport unavailable() {
+            return new FloodgateSupport(null, null);
+        }
+
+        private boolean isAvailable() {
+            return api != null && isPlayerMethod != null;
+        }
     }
 }
