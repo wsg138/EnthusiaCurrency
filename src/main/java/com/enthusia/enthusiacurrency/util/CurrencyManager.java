@@ -37,11 +37,12 @@ public class CurrencyManager {
         }
 
         String blockMatName = config.getString("currency.block-material", "");
-        this.blockMaterial = null;
+        this.blockMaterial = Material.AIR;
         if (blockMatName != null && !blockMatName.isEmpty()) {
             this.blockMaterial = Material.matchMaterial(blockMatName);
             if (this.blockMaterial == null) {
                 plugin.getLogger().severe("Invalid currency.block-material: " + blockMatName + ", disabling block form.");
+                this.blockMaterial = Material.AIR;
             }
         }
 
@@ -69,11 +70,11 @@ public class CurrencyManager {
     }
 
     public int getBlockValue() {
-        return blockMaterial != null && blockValue > 0 ? blockValue : 0;
+        return hasBlockForm() ? blockValue : 0;
     }
 
     public boolean hasBlockForm() {
-        return blockMaterial != null && blockValue > 0;
+        return blockMaterial != Material.AIR && blockValue > 0;
     }
 
     public ItemStack createCurrencyItem(int amount) {
@@ -96,13 +97,20 @@ public class CurrencyManager {
         if (stack.getType() != material) return false;
 
         ItemMeta meta = stack.getItemMeta();
+        return matchesConfiguredName(meta) && matchesConfiguredLore(meta);
+    }
+
+    private boolean matchesConfiguredName(ItemMeta meta) {
         if (useName) {
             if (meta == null || !meta.hasDisplayName()) return false;
             String display = ChatColor.stripColor(meta.getDisplayName());
             String want = ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', name));
             if (!display.equalsIgnoreCase(want)) return false;
         }
+        return true;
+    }
 
+    private boolean matchesConfiguredLore(ItemMeta meta) {
         if (useLore) {
             if (meta == null || !meta.hasLore()) return false;
             List<String> itemLore = meta.getLore();
@@ -121,7 +129,6 @@ public class CurrencyManager {
                 }
             }
         }
-
         return true;
     }
 

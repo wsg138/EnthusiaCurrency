@@ -205,7 +205,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
             return;
         }
 
-        this.tokenEconomy = new TokenEconomy(this, balanceStorage, currencyManager);
+        this.tokenEconomy = new TokenEconomy(this, balanceStorage);
         Bukkit.getServicesManager().register(Economy.class, tokenEconomy, this, ServicePriority.Highest);
 
         RegisteredServiceProvider<Economy> rsp = Bukkit.getServicesManager().getRegistration(Economy.class);

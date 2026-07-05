@@ -6,9 +6,9 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class SqlitePlayerProfileRepository implements PlayerProfileRepository {
 
@@ -23,11 +23,9 @@ public final class SqlitePlayerProfileRepository implements PlayerProfileReposit
             )
             """;
 
-    private final Path databasePath;
     private final String jdbcUrl;
 
     public SqlitePlayerProfileRepository(Path databasePath) {
-        this.databasePath = databasePath;
         this.jdbcUrl = "jdbc:sqlite:" + databasePath.toAbsolutePath();
     }
 
@@ -44,7 +42,7 @@ public final class SqlitePlayerProfileRepository implements PlayerProfileReposit
 
     @Override
     public Map<UUID, PlayerProfile> loadAllProfiles() throws Exception {
-        Map<UUID, PlayerProfile> profiles = new HashMap<>();
+        Map<UUID, PlayerProfile> profiles = new ConcurrentHashMap<>();
         try (Connection connection = openConnection();
              Statement statement = connection.createStatement();
              ResultSet resultSet = statement.executeQuery("""

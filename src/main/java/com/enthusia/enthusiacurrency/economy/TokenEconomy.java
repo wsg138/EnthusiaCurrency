@@ -23,7 +23,7 @@ public class TokenEconomy implements Economy {
     private final EnthusiaCurrencyPlugin plugin;
     private final BalanceStorage storage;
 
-    public TokenEconomy(EnthusiaCurrencyPlugin plugin, BalanceStorage storage, com.enthusia.enthusiacurrency.util.CurrencyManager currencyManager) {
+    public TokenEconomy(EnthusiaCurrencyPlugin plugin, BalanceStorage storage) {
         this.plugin = plugin;
         this.storage = storage;
     }
@@ -303,6 +303,7 @@ public class TokenEconomy implements Economy {
     }
 
     private static final class EconomyOperationException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
 
         private EconomyOperationException(Throwable cause) {
             super(cause);

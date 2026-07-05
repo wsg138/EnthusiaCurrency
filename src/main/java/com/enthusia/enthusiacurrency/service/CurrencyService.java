@@ -383,7 +383,7 @@ public class CurrencyService {
 
     private WithdrawalStacks withdrawalStacks(long amount) {
         int blockValue = currencyManager.getBlockValue();
-        boolean canUseBlocks = currencyManager.getBlockMaterial() != null && blockValue > 0;
+        boolean canUseBlocks = currencyManager.hasBlockForm();
         if (!canUseBlocks || (amount % blockValue != 0 && amount <= 128)) {
             return new WithdrawalStacks(canUseBlocks, 0L, amount);
         }

@@ -171,15 +171,17 @@ public final class CurrencyUtils {
             return new int[]{0, 0};
         }
 
+        int remainingItems = itemsToRemove;
+        int remainingBlocks = blocksToRemove;
         for (int i = 0; i < inv.getSize(); i++) {
-            if (itemsToRemove <= 0 && blocksToRemove <= 0) break;
+            if (remainingItems <= 0 && remainingBlocks <= 0) break;
 
             ItemStack stack = inv.getItem(i);
             if (stack == null || stack.getType() == Material.AIR) continue;
 
-            if (manager.isCurrencyItem(stack) && itemsToRemove > 0) {
-                int take = Math.min(stack.getAmount(), itemsToRemove);
-                itemsToRemove -= take;
+            if (manager.isCurrencyItem(stack) && remainingItems > 0) {
+                int take = Math.min(stack.getAmount(), remainingItems);
+                remainingItems -= take;
                 int newAmount = stack.getAmount() - take;
                 if (newAmount <= 0) {
                     inv.setItem(i, null);
@@ -189,9 +191,9 @@ public final class CurrencyUtils {
                 continue;
             }
 
-            if (manager.isCurrencyBlock(stack) && blocksToRemove > 0) {
-                int take = Math.min(stack.getAmount(), blocksToRemove);
-                blocksToRemove -= take;
+            if (manager.isCurrencyBlock(stack) && remainingBlocks > 0) {
+                int take = Math.min(stack.getAmount(), remainingBlocks);
+                remainingBlocks -= take;
                 int newAmount = stack.getAmount() - take;
                 if (newAmount <= 0) {
                     inv.setItem(i, null);
@@ -204,17 +206,17 @@ public final class CurrencyUtils {
             if (stack.getItemMeta() instanceof BlockStateMeta meta) {
                 if (meta.getBlockState() instanceof ShulkerBox box) {
                     Inventory innerInv = box.getInventory();
-                    int[] innerRem = removeFromInventory(manager, innerInv, itemsToRemove, blocksToRemove);
-                    itemsToRemove = innerRem[0];
-                    blocksToRemove = innerRem[1];
+                    int[] innerRem = removeFromInventory(manager, innerInv, remainingItems, remainingBlocks);
+                    remainingItems = innerRem[0];
+                    remainingBlocks = innerRem[1];
                     box.getInventory().setContents(innerInv.getContents());
                     meta.setBlockState(box);
                     stack.setItemMeta(meta);
-                    if (itemsToRemove <= 0 && blocksToRemove <= 0) break;
+                    if (remainingItems <= 0 && remainingBlocks <= 0) break;
                 }
             }
         }
 
-        return new int[]{itemsToRemove, blocksToRemove};
+        return new int[]{remainingItems, remainingBlocks};
     }
 }
