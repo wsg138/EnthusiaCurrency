@@ -8,7 +8,6 @@ import org.bukkit.entity.Player;
 import java.nio.file.Files;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -58,11 +57,7 @@ public final class PlayerProfileStorage {
     }
 
     public void recordOnlinePlayer(Player player) {
-        String displayName = stripToNull(player.getDisplayName());
-        if (displayName != null && displayName.equals(player.getName())) {
-            displayName = null;
-        }
-        record(player.getUniqueId(), player.getName(), displayName, Instant.now().toEpochMilli());
+        record(player.getUniqueId(), player.getName(), normalizedDisplayName(player), Instant.now().toEpochMilli());
     }
 
     public void recordKnownPlayer(OfflinePlayer player) {
@@ -79,7 +74,7 @@ public final class PlayerProfileStorage {
     }
 
     public Map<UUID, PlayerProfile> getAllProfilesSnapshot() {
-        Map<UUID, PlayerProfile> snapshot = new HashMap<>();
+        Map<UUID, PlayerProfile> snapshot = new ConcurrentHashMap<>();
         for (Map.Entry<UUID, CachedProfile> entry : profiles.entrySet()) {
             snapshot.put(entry.getKey(), entry.getValue().profile());
         }
@@ -156,53 +151,70 @@ public final class PlayerProfileStorage {
     private void runFlushLoop() {
         Throwable failure = null;
         try {
-            while (true) {
-                Map<UUID, CachedProfile> snapshot = snapshotDirtyProfiles();
-                if (snapshot.isEmpty()) {
-                    break;
-                }
-
-                Map<UUID, PlayerProfile> toSave = new HashMap<>();
-                for (Map.Entry<UUID, CachedProfile> entry : snapshot.entrySet()) {
-                    toSave.put(entry.getKey(), entry.getValue().profile());
-                }
-                repository.saveProfiles(toSave);
-
-                for (Map.Entry<UUID, CachedProfile> entry : snapshot.entrySet()) {
-                    CachedProfile current = profiles.get(entry.getKey());
-                    if (current != null && current.version() == entry.getValue().version()) {
-                        dirtyKeys.remove(entry.getKey());
-                    }
-                }
-            }
+            flushDirtyProfiles();
         } catch (Exception ex) {
             failure = ex;
             plugin.getLogger().severe("Failed to flush player profiles: " + ex.getMessage());
             ex.printStackTrace();
         } finally {
-            ArrayList<CompletableFuture<Void>> toComplete;
-            synchronized (flushLock) {
-                flushQueued = false;
-                toComplete = new ArrayList<>(pendingFlushFutures);
-                pendingFlushFutures.clear();
-                if (!dirtyKeys.isEmpty() && !closed && !flushQueued) {
-                    flushQueued = true;
-                    writerExecutor.execute(this::runFlushLoop);
-                }
-            }
+            completePendingFlushes(failure);
+        }
+    }
 
-            for (CompletableFuture<Void> future : toComplete) {
-                if (failure == null) {
-                    future.complete(null);
-                } else {
-                    future.completeExceptionally(failure);
-                }
+    private void flushDirtyProfiles() throws Exception {
+        while (true) {
+            Map<UUID, CachedProfile> snapshot = snapshotDirtyProfiles();
+            if (snapshot.isEmpty()) {
+                return;
+            }
+            repository.saveProfiles(profileValues(snapshot));
+            clearCleanDirtyKeys(snapshot);
+        }
+    }
+
+    private Map<UUID, PlayerProfile> profileValues(Map<UUID, CachedProfile> snapshot) {
+        Map<UUID, PlayerProfile> toSave = new ConcurrentHashMap<>();
+        for (Map.Entry<UUID, CachedProfile> entry : snapshot.entrySet()) {
+            toSave.put(entry.getKey(), entry.getValue().profile());
+        }
+        return toSave;
+    }
+
+    private void clearCleanDirtyKeys(Map<UUID, CachedProfile> snapshot) {
+        for (Map.Entry<UUID, CachedProfile> entry : snapshot.entrySet()) {
+            CachedProfile current = profiles.get(entry.getKey());
+            if (current != null && current.version() == entry.getValue().version()) {
+                dirtyKeys.remove(entry.getKey());
             }
         }
     }
 
+    private void completePendingFlushes(Throwable failure) {
+        ArrayList<CompletableFuture<Void>> toComplete;
+        synchronized (flushLock) {
+            flushQueued = false;
+            toComplete = new ArrayList<>(pendingFlushFutures);
+            pendingFlushFutures.clear();
+            if (!dirtyKeys.isEmpty() && !closed && !flushQueued) {
+                flushQueued = true;
+                writerExecutor.execute(this::runFlushLoop);
+            }
+        }
+        for (CompletableFuture<Void> future : toComplete) {
+            completeFuture(future, failure);
+        }
+    }
+
+    private void completeFuture(CompletableFuture<Void> future, Throwable failure) {
+        if (failure == null) {
+            future.complete(null);
+        } else {
+            future.completeExceptionally(failure);
+        }
+    }
+
     private Map<UUID, CachedProfile> snapshotDirtyProfiles() {
-        Map<UUID, CachedProfile> snapshot = new HashMap<>();
+        Map<UUID, CachedProfile> snapshot = new ConcurrentHashMap<>();
         for (UUID uuid : dirtyKeys) {
             CachedProfile cachedProfile = profiles.get(uuid);
             if (cachedProfile != null) {
@@ -210,6 +222,11 @@ public final class PlayerProfileStorage {
             }
         }
         return snapshot;
+    }
+
+    private String normalizedDisplayName(Player player) {
+        String displayName = stripToNull(player.getDisplayName());
+        return displayName != null && displayName.equals(player.getName()) ? null : displayName;
     }
 
     private void flushBlocking() {

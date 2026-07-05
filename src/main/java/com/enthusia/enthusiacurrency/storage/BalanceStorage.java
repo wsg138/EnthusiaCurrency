@@ -7,7 +7,6 @@ import java.io.File;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.file.Files;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.List;
@@ -159,7 +158,7 @@ public class BalanceStorage {
     }
 
     public Map<UUID, Long> getAllBalancesSnapshot() {
-        Map<UUID, Long> snapshot = new HashMap<>();
+        Map<UUID, Long> snapshot = new ConcurrentHashMap<>();
         for (Map.Entry<UUID, CachedBalance> entry : balances.entrySet()) {
             snapshot.put(entry.getKey(), entry.getValue().amount());
         }
@@ -253,54 +252,71 @@ public class BalanceStorage {
         Throwable failure = null;
         long startedAt = System.currentTimeMillis();
         try {
-            while (true) {
-                Map<UUID, CachedBalance> snapshot = snapshotDirtyBalances();
-                if (snapshot.isEmpty()) {
-                    break;
-                }
-
-                Map<UUID, Long> toSave = new HashMap<>();
-                for (Map.Entry<UUID, CachedBalance> entry : snapshot.entrySet()) {
-                    toSave.put(entry.getKey(), entry.getValue().amount());
-                }
-                repository.saveBalances(toSave);
-
-                for (Map.Entry<UUID, CachedBalance> entry : snapshot.entrySet()) {
-                    CachedBalance current = balances.get(entry.getKey());
-                    if (current != null && current.version() == entry.getValue().version()) {
-                        dirtyKeys.remove(entry.getKey());
-                    }
-                }
-            }
+            flushDirtyBalances();
         } catch (Exception ex) {
             failure = ex;
             plugin.getLogger().severe("Failed to flush balances: " + ex.getMessage());
             ex.printStackTrace();
         } finally {
             plugin.getDebugMetrics().balanceFlushDuration(System.currentTimeMillis() - startedAt);
-            List<CompletableFuture<Void>> toComplete;
-            synchronized (flushLock) {
-                flushQueued = false;
-                toComplete = new ArrayList<>(pendingFlushFutures);
-                pendingFlushFutures.clear();
-                if (!dirtyKeys.isEmpty() && !closed && !flushQueued) {
-                    flushQueued = true;
-                    writerExecutor.execute(this::runFlushLoop);
-                }
-            }
+            completePendingFlushes(failure);
+        }
+    }
 
-            for (CompletableFuture<Void> future : toComplete) {
-                if (failure == null) {
-                    future.complete(null);
-                } else {
-                    future.completeExceptionally(failure);
-                }
+    private void flushDirtyBalances() throws Exception {
+        while (true) {
+            Map<UUID, CachedBalance> snapshot = snapshotDirtyBalances();
+            if (snapshot.isEmpty()) {
+                return;
+            }
+            repository.saveBalances(balanceValues(snapshot));
+            clearCleanDirtyKeys(snapshot);
+        }
+    }
+
+    private Map<UUID, Long> balanceValues(Map<UUID, CachedBalance> snapshot) {
+        Map<UUID, Long> toSave = new ConcurrentHashMap<>();
+        for (Map.Entry<UUID, CachedBalance> entry : snapshot.entrySet()) {
+            toSave.put(entry.getKey(), entry.getValue().amount());
+        }
+        return toSave;
+    }
+
+    private void clearCleanDirtyKeys(Map<UUID, CachedBalance> snapshot) {
+        for (Map.Entry<UUID, CachedBalance> entry : snapshot.entrySet()) {
+            CachedBalance current = balances.get(entry.getKey());
+            if (current != null && current.version() == entry.getValue().version()) {
+                dirtyKeys.remove(entry.getKey());
             }
         }
     }
 
+    private void completePendingFlushes(Throwable failure) {
+        List<CompletableFuture<Void>> toComplete;
+        synchronized (flushLock) {
+            flushQueued = false;
+            toComplete = new ArrayList<>(pendingFlushFutures);
+            pendingFlushFutures.clear();
+            if (!dirtyKeys.isEmpty() && !closed && !flushQueued) {
+                flushQueued = true;
+                writerExecutor.execute(this::runFlushLoop);
+            }
+        }
+        for (CompletableFuture<Void> future : toComplete) {
+            completeFuture(future, failure);
+        }
+    }
+
+    private void completeFuture(CompletableFuture<Void> future, Throwable failure) {
+        if (failure == null) {
+            future.complete(null);
+        } else {
+            future.completeExceptionally(failure);
+        }
+    }
+
     private Map<UUID, CachedBalance> snapshotDirtyBalances() {
-        Map<UUID, CachedBalance> snapshot = new HashMap<>();
+        Map<UUID, CachedBalance> snapshot = new ConcurrentHashMap<>();
         for (UUID uuid : dirtyKeys) {
             CachedBalance cachedBalance = balances.get(uuid);
             if (cachedBalance != null) {

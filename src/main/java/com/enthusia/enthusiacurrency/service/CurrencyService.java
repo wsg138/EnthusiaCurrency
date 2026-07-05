@@ -26,7 +26,14 @@ public class CurrencyService {
     private record CachedItemBalance(long amount, long expiresAtNanos) {
     }
 
+    private record WithdrawalStacks(boolean canUseBlocks, long blocks, long items) {
+    }
+
     private static final long ITEM_BALANCE_CACHE_TTL_NANOS = 2_000_000_000L;
+    private static final String REASON_OVERFLOW = "overflow";
+    private static final String REASON_INVALID = "invalid";
+    private static final String REASON_INSUFFICIENT = "insufficient";
+    private static final String REASON_INVENTORY_FULL = "inventory-full";
 
     public record BalanceView(long bank, long items, long total) {
     }
@@ -93,7 +100,7 @@ public class CurrencyService {
             return new DepositResult(false, 0L, getBankBalance(player.getUniqueId()));
         }
         if (balanceStorage.wouldOverflow(player.getUniqueId(), totalValue)) {
-            recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, totalValue, getBankBalance(player.getUniqueId()), "overflow");
+            recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, totalValue, getBankBalance(player.getUniqueId()), REASON_OVERFLOW);
             return new DepositResult(false, 0L, getBankBalance(player.getUniqueId()));
         }
 
@@ -116,11 +123,11 @@ public class CurrencyService {
         plugin.getPlayerProfileStorage().recordOnlinePlayer(player);
         CurrencyUtils.CurrencyBreakdown breakdown = CurrencyUtils.getCurrencyBreakdown(currencyManager, player);
         if (amount <= 0 || amount > breakdown.totalValue()) {
-            recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, Math.max(0L, amount), getBankBalance(player.getUniqueId()), "invalid");
+            recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, Math.max(0L, amount), getBankBalance(player.getUniqueId()), REASON_INVALID);
             return new DepositResult(false, 0L, getBankBalance(player.getUniqueId()));
         }
         if (balanceStorage.wouldOverflow(player.getUniqueId(), amount)) {
-            recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, amount, getBankBalance(player.getUniqueId()), "overflow");
+            recordAnalytics(CurrencyAnalyticsAction.DEPOSIT, false, player, null, amount, getBankBalance(player.getUniqueId()), REASON_OVERFLOW);
             return new DepositResult(false, 0L, getBankBalance(player.getUniqueId()));
         }
 
@@ -171,58 +178,29 @@ public class CurrencyService {
     public WithdrawResult withdrawToInventory(Player player, long amount) {
         plugin.getPlayerProfileStorage().recordOnlinePlayer(player);
         if (amount <= 0) {
-            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, Math.max(0L, amount), getBankBalance(player.getUniqueId()), "invalid");
-            return new WithdrawResult(false, 0L, getBankBalance(player.getUniqueId()), "invalid");
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, Math.max(0L, amount), getBankBalance(player.getUniqueId()), REASON_INVALID);
+            return new WithdrawResult(false, 0L, getBankBalance(player.getUniqueId()), REASON_INVALID);
         }
 
         long bankBalance = getBankBalance(player.getUniqueId());
         if (bankBalance < amount) {
-            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, bankBalance, "insufficient");
-            return new WithdrawResult(false, 0L, bankBalance, "insufficient");
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, bankBalance, REASON_INSUFFICIENT);
+            return new WithdrawResult(false, 0L, bankBalance, REASON_INSUFFICIENT);
         }
 
-        int blockValue = currencyManager.getBlockValue();
-        boolean canUseBlocks = currencyManager.getBlockMaterial() != null && blockValue > 0;
+        WithdrawalStacks stacks = withdrawalStacks(amount);
 
-        long blocks = 0L;
-        long items = amount;
-
-        if (canUseBlocks && (amount % blockValue == 0 || amount > 128)) {
-            blocks = amount / blockValue;
-            items = amount % blockValue;
-        }
-
-        if (!canFitWithdrawal(player.getInventory(), canUseBlocks, blocks, items)) {
-            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, bankBalance, "inventory-full");
-            return new WithdrawResult(false, 0L, bankBalance, "inventory-full");
+        if (!canFitWithdrawal(player.getInventory(), stacks.canUseBlocks(), stacks.blocks(), stacks.items())) {
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, bankBalance, REASON_INVENTORY_FULL);
+            return new WithdrawResult(false, 0L, bankBalance, REASON_INVENTORY_FULL);
         }
 
         if (!balanceStorage.withdraw(player.getUniqueId(), amount)) {
-            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBankBalance(player.getUniqueId()), "insufficient");
-            return new WithdrawResult(false, 0L, getBankBalance(player.getUniqueId()), "insufficient");
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBankBalance(player.getUniqueId()), REASON_INSUFFICIENT);
+            return new WithdrawResult(false, 0L, getBankBalance(player.getUniqueId()), REASON_INSUFFICIENT);
         }
 
-        if (canUseBlocks && blocks > 0) {
-            long remainingBlocks = blocks;
-            int blockMaxStack = currencyManager.getBlockMaterial().getMaxStackSize();
-            while (remainingBlocks > 0) {
-                int stackSize = (int) Math.min(remainingBlocks, blockMaxStack);
-                Map<Integer, ItemStack> overflow = player.getInventory().addItem(new ItemStack(currencyManager.getBlockMaterial(), stackSize));
-                dropOverflow(player, overflow);
-                remainingBlocks -= stackSize;
-            }
-        }
-
-        if (items > 0) {
-            long remainingItems = items;
-            int itemMaxStack = currencyManager.getMaterial().getMaxStackSize();
-            while (remainingItems > 0) {
-                int stackSize = (int) Math.min(remainingItems, itemMaxStack);
-                Map<Integer, ItemStack> overflow = player.getInventory().addItem(currencyManager.createCurrencyItem(stackSize));
-                dropOverflow(player, overflow);
-                remainingItems -= stackSize;
-            }
-        }
+        addWithdrawalItems(player, stacks);
 
         invalidateItemBalance(player.getUniqueId());
         refreshTrackedItems(player, "withdraw");
@@ -244,12 +222,12 @@ public class CurrencyService {
 
         BalanceView senderView = getBalanceView(sender);
         if (amount <= 0 || senderView.total() < amount) {
-            recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, Math.max(0L, amount), senderView.bank(), "insufficient");
-            return new PayResult(false, 0L, senderView.bank(), "insufficient");
+            recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, Math.max(0L, amount), senderView.bank(), REASON_INSUFFICIENT);
+            return new PayResult(false, 0L, senderView.bank(), REASON_INSUFFICIENT);
         }
         if (balanceStorage.wouldOverflow(target.getUniqueId(), amount)) {
-            recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), "overflow");
-            return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), "overflow");
+            recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), REASON_OVERFLOW);
+            return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), REASON_OVERFLOW);
         }
 
         long remaining = amount;
@@ -259,8 +237,8 @@ public class CurrencyService {
         long fromBank = Math.min(bankAvailable, remaining);
         if (fromBank > 0) {
             if (!balanceStorage.withdraw(sender.getUniqueId(), fromBank)) {
-                recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), "insufficient");
-                return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), "insufficient");
+                recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), REASON_INSUFFICIENT);
+                return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), REASON_INSUFFICIENT);
             }
             remaining -= fromBank;
             totalRefund += fromBank;
@@ -274,8 +252,8 @@ public class CurrencyService {
                 }
                 invalidateItemBalance(sender.getUniqueId());
                 refreshTrackedItems(sender, "pay-failed-refund");
-                recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), "insufficient");
-                return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), "insufficient");
+                recordAnalytics(CurrencyAnalyticsAction.PAY_FAILED, false, sender, target, amount, getBankBalance(sender.getUniqueId()), REASON_INSUFFICIENT);
+                return new PayResult(false, 0L, getBankBalance(sender.getUniqueId()), REASON_INSUFFICIENT);
             }
 
             if (removed > remaining) {
@@ -323,22 +301,22 @@ public class CurrencyService {
     public VaultWithdrawResult withdrawTotal(OfflinePlayer player, long amount) {
         plugin.getPlayerProfileStorage().recordKnownPlayer(player);
         if (amount <= 0) {
-            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, Math.max(0L, amount), getBankBalance(player), "invalid");
-            return new VaultWithdrawResult(false, 0L, getBankBalance(player), "invalid");
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, Math.max(0L, amount), getBankBalance(player), REASON_INVALID);
+            return new VaultWithdrawResult(false, 0L, getBankBalance(player), REASON_INVALID);
         }
 
         Player onlinePlayer = player.getPlayer();
         if (onlinePlayer != null && onlinePlayer.isOnline()) {
             BalanceView balanceView = getBalanceView(player);
             if (balanceView.total() < amount) {
-                recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, balanceView.total(), "insufficient");
-                return new VaultWithdrawResult(false, 0L, balanceView.total(), "insufficient");
+                recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, balanceView.total(), REASON_INSUFFICIENT);
+                return new VaultWithdrawResult(false, 0L, balanceView.total(), REASON_INSUFFICIENT);
             }
 
             long bankTaken = Math.min(balanceView.bank(), amount);
             if (bankTaken > 0 && !balanceStorage.withdraw(player.getUniqueId(), bankTaken)) {
-                recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBankBalance(player), "insufficient");
-                return new VaultWithdrawResult(false, 0L, getBankBalance(player), "insufficient");
+                recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBankBalance(player), REASON_INSUFFICIENT);
+                return new VaultWithdrawResult(false, 0L, getBankBalance(player), REASON_INSUFFICIENT);
             }
 
             long remaining = amount - bankTaken;
@@ -350,8 +328,8 @@ public class CurrencyService {
                     }
                     invalidateItemBalance(player.getUniqueId());
                     refreshTrackedItems(onlinePlayer, "vault-withdraw-failed-refund");
-                    recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBalanceView(player).total(), "insufficient");
-                    return new VaultWithdrawResult(false, bankTaken, getBalanceView(player).total(), "insufficient");
+                    recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBalanceView(player).total(), REASON_INSUFFICIENT);
+                    return new VaultWithdrawResult(false, bankTaken, getBalanceView(player).total(), REASON_INSUFFICIENT);
                 }
                 if (removed > remaining) {
                     balanceStorage.deposit(player.getUniqueId(), removed - remaining);
@@ -367,8 +345,8 @@ public class CurrencyService {
         }
 
         if (!balanceStorage.withdraw(player.getUniqueId(), amount)) {
-            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBankBalance(player), "insufficient");
-            return new VaultWithdrawResult(false, 0L, getBankBalance(player), "insufficient");
+            recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, getBankBalance(player), REASON_INSUFFICIENT);
+            return new VaultWithdrawResult(false, 0L, getBankBalance(player), REASON_INSUFFICIENT);
         }
 
         long newBalance = getBankBalance(player);
@@ -400,6 +378,46 @@ public class CurrencyService {
     private void dropOverflow(Player player, Map<Integer, ItemStack> overflow) {
         for (ItemStack itemStack : overflow.values()) {
             player.getWorld().dropItemNaturally(player.getLocation(), itemStack);
+        }
+    }
+
+    private WithdrawalStacks withdrawalStacks(long amount) {
+        int blockValue = currencyManager.getBlockValue();
+        boolean canUseBlocks = currencyManager.getBlockMaterial() != null && blockValue > 0;
+        if (!canUseBlocks || (amount % blockValue != 0 && amount <= 128)) {
+            return new WithdrawalStacks(canUseBlocks, 0L, amount);
+        }
+        return new WithdrawalStacks(true, amount / blockValue, amount % blockValue);
+    }
+
+    private void addWithdrawalItems(Player player, WithdrawalStacks stacks) {
+        if (stacks.canUseBlocks() && stacks.blocks() > 0) {
+            addBlockStacks(player, stacks.blocks());
+        }
+        if (stacks.items() > 0) {
+            addCurrencyItemStacks(player, stacks.items());
+        }
+    }
+
+    private void addBlockStacks(Player player, long blocks) {
+        long remainingBlocks = blocks;
+        int maxStack = currencyManager.getBlockMaterial().getMaxStackSize();
+        while (remainingBlocks > 0) {
+            int stackSize = (int) Math.min(remainingBlocks, maxStack);
+            Map<Integer, ItemStack> overflow = player.getInventory().addItem(new ItemStack(currencyManager.getBlockMaterial(), stackSize));
+            dropOverflow(player, overflow);
+            remainingBlocks -= stackSize;
+        }
+    }
+
+    private void addCurrencyItemStacks(Player player, long items) {
+        long remainingItems = items;
+        int maxStack = currencyManager.getMaterial().getMaxStackSize();
+        while (remainingItems > 0) {
+            int stackSize = (int) Math.min(remainingItems, maxStack);
+            Map<Integer, ItemStack> overflow = player.getInventory().addItem(currencyManager.createCurrencyItem(stackSize));
+            dropOverflow(player, overflow);
+            remainingItems -= stackSize;
         }
     }
 
