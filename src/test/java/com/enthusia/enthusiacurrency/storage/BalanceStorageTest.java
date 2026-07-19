@@ -49,6 +49,17 @@ class BalanceStorageTest {
     }
 
     @Test
+    void initializesAccountsOnceAndClampsExplicitBalancesToZero() {
+        UUID player = UUID.randomUUID();
+        storage = new BalanceStorage(new RecordingRepository(), 25L);
+
+        assertThat(storage.ensureAccount(player)).isEqualTo(25L);
+        assertThat(storage.ensureAccount(player)).isEqualTo(25L);
+        assertThat(storage.setBalance(player, -5L)).isZero();
+        assertThat(storage.getAllBalancesSnapshot()).containsExactly(Map.entry(player, 0L));
+    }
+
+    @Test
     void concurrentWithdrawalsCannotOverspendAndFlushPersistsAcceptedWrites() throws Exception {
         UUID player = UUID.randomUUID();
         RecordingRepository repository = new RecordingRepository();
