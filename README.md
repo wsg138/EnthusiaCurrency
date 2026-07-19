@@ -24,9 +24,9 @@ On systems where the Windows wrapper cannot locate PowerShell, use the equivalen
 mvn --batch-mode --no-transfer-progress clean verify
 ```
 
-Unit tests use `*Test.java`; integration tests use `*IT.java` and run during `verify`. The combined JaCoCo XML and HTML reports are written to `target/site/jacoco/`. The parser and SQLite repository require 80% line coverage and 70% branch coverage; the currently tested balance ledger requires 50% line and 45% branch coverage. These package/class gates protect balance parsing, persistence, and concurrent in-memory transitions while the remaining Bukkit-facing transaction paths are expanded.
+Unit tests use `*Test.java`; integration tests use `*IT.java` and run during `verify`. The combined JaCoCo XML and HTML reports are written to `target/site/jacoco/`. The parser, SQLite repositories, and legacy migration require 80% line coverage and 70% branch coverage; the currently tested balance ledger requires 50% line and 45% branch coverage. These class gates protect balance parsing, persistence, migration, player identity persistence, and concurrent in-memory transitions while the remaining Bukkit-facing transaction paths are expanded.
 
-Mutation testing currently enforces a 60% score for the amount parser and SQLite repository. A local exploratory run that also included the in-memory balance ledger measured 46% (73/158 mutants killed), so that class remains covered by JaCoCo while its PIT scope is expanded only after more of its lifecycle and failure paths are tested. PIT runs nightly on `main` or on demand:
+Mutation testing currently enforces a 60% score for the amount parser, SQLite repositories, and legacy migration. A local exploratory run that also included the in-memory balance ledger measured 46% (73/158 mutants killed), so that class remains covered by JaCoCo while its PIT scope is expanded only after more of its lifecycle and failure paths are tested. PIT runs nightly on `main` or on demand:
 
 ```powershell
 .\mvnw.cmd --batch-mode --no-transfer-progress -Pmutation-testing clean test pitest:mutationCoverage

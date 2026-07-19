@@ -36,4 +36,33 @@ class SqliteBalanceRepositoryIT {
 
         assertThat(restarted.loadAllBalances()).containsExactly(Map.entry(player, 725L));
     }
+
+    @Test
+    void importsLegacyBalancesOnceAndPreservesThemAcrossRestart() throws Exception {
+        Path database = temporaryDirectory.resolve("balances.db");
+        Path yaml = temporaryDirectory.resolve("balances.yml");
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        java.nio.file.Files.writeString(yaml, """
+                balances:
+                  %s: 100
+                  %s: 250
+                """.formatted(first, second));
+
+        SqliteBalanceRepository repository = new SqliteBalanceRepository(database);
+        repository.initialize();
+        Map<UUID, Long> migrated = LegacyYamlBalanceMigration.loadBalances(
+                yaml.toFile(), java.util.logging.Logger.getAnonymousLogger());
+        repository.saveBalances(migrated);
+        LegacyYamlBalanceMigration.markMigrated(yaml.toFile());
+
+        SqliteBalanceRepository restarted = new SqliteBalanceRepository(database);
+        restarted.initialize();
+        assertThat(restarted.loadAllBalances()).containsExactlyInAnyOrderEntriesOf(migrated);
+        assertThat(yaml).doesNotExist();
+        assertThat(yaml.resolveSibling("balances.yml.migrated")).exists();
+
+        LegacyYamlBalanceMigration.markMigrated(yaml.toFile());
+        assertThat(restarted.loadAllBalances()).containsExactlyInAnyOrderEntriesOf(migrated);
+    }
 }

@@ -191,6 +191,17 @@
                                 <rule>
                                     <element>CLASS</element>
                                     <includes>
+                                        <include>com.enthusia.enthusiacurrency.storage.LegacyYamlBalanceMigration</include>
+                                        <include>com.enthusia.enthusiacurrency.storage.SqlitePlayerProfileRepository</include>
+                                    </includes>
+                                    <limits>
+                                        <limit><counter>LINE</counter><value>COVEREDRATIO</value><minimum>0.80</minimum></limit>
+                                        <limit><counter>BRANCH</counter><value>COVEREDRATIO</value><minimum>0.70</minimum></limit>
+                                    </limits>
+                                </rule>
+                                <rule>
+                                    <element>CLASS</element>
+                                    <includes>
                                         <include>com.enthusia.enthusiacurrency.storage.BalanceStorage</include>
                                     </includes>
                                     <limits>
@@ -233,6 +244,8 @@
                             <targetClasses>
                                 <param>com.enthusia.enthusiacurrency.service.CurrencyAmountParser</param>
                                 <param>com.enthusia.enthusiacurrency.storage.SqliteBalanceRepository</param>
+                                <param>com.enthusia.enthusiacurrency.storage.LegacyYamlBalanceMigration</param>
+                                <param>com.enthusia.enthusiacurrency.storage.SqlitePlayerProfileRepository</param>
                             </targetClasses>
                             <targetTests>
                                 <param>com.enthusia.enthusiacurrency.*</param>
