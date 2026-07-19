@@ -46,13 +46,6 @@ public class BalanceStorage {
         this.writerExecutor = Executors.newSingleThreadExecutor(new BalanceWriterThreadFactory());
     }
 
-    BalanceStorage(BalanceRepository repository, long startingBalance) {
-        this.plugin = null;
-        this.repository = repository;
-        this.startingBalance = Math.max(0L, startingBalance);
-        this.writerExecutor = Executors.newSingleThreadExecutor(new BalanceWriterThreadFactory());
-    }
-
     public void load() {
         try {
             Files.createDirectories(plugin.getDataFolder().toPath());
@@ -250,9 +243,7 @@ public class BalanceStorage {
 
     private void markDirty(UUID uuid) {
         dirtyKeys.add(uuid);
-        if (plugin != null && plugin.getDebugMetrics() != null) {
-            plugin.getDebugMetrics().balanceDirtyMark();
-        }
+        plugin.getDebugMetrics().balanceDirtyMark();
         if (dirtyKeys.size() >= flushThreshold) {
             flushAsync();
         }
@@ -265,14 +256,10 @@ public class BalanceStorage {
             flushDirtyBalances();
         } catch (Exception ex) {
             failure = ex;
-            if (plugin != null) {
-                plugin.getLogger().severe("Failed to flush balances: " + ex.getMessage());
-                ex.printStackTrace();
-            }
+            plugin.getLogger().severe("Failed to flush balances: " + ex.getMessage());
+            ex.printStackTrace();
         } finally {
-            if (plugin != null && plugin.getDebugMetrics() != null) {
-                plugin.getDebugMetrics().balanceFlushDuration(System.currentTimeMillis() - startedAt);
-            }
+            plugin.getDebugMetrics().balanceFlushDuration(System.currentTimeMillis() - startedAt);
             completePendingFlushes(failure);
         }
     }
