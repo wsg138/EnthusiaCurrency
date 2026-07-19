@@ -17,6 +17,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,11 +56,11 @@ jobs:
           retention-days: 14
 
       - name: Report missing Codacy configuration
-        if: ${{ secrets.CODACY_PROJECT_TOKEN == '' }}
+        if: ${{ env.CODACY_PROJECT_TOKEN == '' }}
         run: echo "Codacy upload skipped because CODACY_PROJECT_TOKEN is not configured for this repository."
 
       - name: Upload JaCoCo coverage to Codacy
-        if: ${{ secrets.CODACY_PROJECT_TOKEN != '' }}
+        if: ${{ env.CODACY_PROJECT_TOKEN != '' }}
         uses: codacy/codacy-coverage-reporter-action@v1.3.0
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
