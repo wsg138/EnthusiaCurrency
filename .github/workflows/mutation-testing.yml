@@ -1,0 +1,39 @@
+name: Nightly mutation testing
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: currency-mutation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pit:
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Run mutation tests for persistence and parsing
+        run: chmod +x mvnw && ./mvnw --batch-mode --no-transfer-progress -Pmutation-testing clean test pitest:mutationCoverage
+
+      - name: Upload PIT report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: enthusia-currency-pit-report
+          path: target/pit-reports
+          if-no-files-found: warn
+          retention-days: 14
