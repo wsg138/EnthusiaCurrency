@@ -30,7 +30,6 @@ public final class DebugMetrics {
     private final AtomicLong r2Failures = new AtomicLong();
     private final AtomicLong skinCacheHits = new AtomicLong();
     private final AtomicLong skinCacheMisses = new AtomicLong();
-    private final AtomicLong skinSaves = new AtomicLong();
 
     private int logTaskId = -1;
 
@@ -134,10 +133,6 @@ public final class DebugMetrics {
         skinCacheMisses.incrementAndGet();
     }
 
-    public void skinSave() {
-        skinSaves.incrementAndGet();
-    }
-
     private void logAndReset() {
         plugin.getLogger().info("[Performance] itemScans=" + itemScansRun.getAndSet(0)
                 + ", playersScanned=" + playersScanned.getAndSet(0)
@@ -159,7 +154,6 @@ public final class DebugMetrics {
                 + ", exportFailed=" + exportFailedCount.getAndSet(0)
                 + ", r2Failures=" + r2Failures.getAndSet(0)
                 + ", skinCacheHits=" + skinCacheHits.getAndSet(0)
-                + ", skinCacheMisses=" + skinCacheMisses.getAndSet(0)
-                + ", skinSaves=" + skinSaves.getAndSet(0));
+                + ", skinCacheMisses=" + skinCacheMisses.getAndSet(0));
     }
 }

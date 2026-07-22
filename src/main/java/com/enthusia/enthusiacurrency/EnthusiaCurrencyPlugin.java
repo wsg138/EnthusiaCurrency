@@ -153,8 +153,8 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     public void onDisable() {
         teardownPlaceholderAPI();
         stopRuntimeServices();
+        closeSkinCache();
         closeStorage();
-        saveSkins();
         getLogger().info("EnthusiaCurrency disabled.");
     }
 
@@ -191,10 +191,9 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         }
     }
 
-    private void saveSkins() {
+    private void closeSkinCache() {
         if (skinCache != null) {
-            skinCache.cancelScheduledSave();
-            skinCache.save();
+            skinCache.close();
         }
     }
 

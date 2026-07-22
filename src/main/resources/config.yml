@@ -1,4 +1,4 @@
-config-version: 3
+config-version: 4
 
 currency:
   material: RAW_GOLD
@@ -68,9 +68,6 @@ item-balance-scan:
   max-players-per-tick: 1
   repair-mode: true
   debug-log-repairs: false
-
-skin-cache:
-  save-debounce-seconds: 60
 
 debug:
   performance:

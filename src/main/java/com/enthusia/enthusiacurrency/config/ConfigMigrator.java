@@ -18,7 +18,7 @@ import java.util.List;
 
 public final class ConfigMigrator {
 
-    public static final int CURRENT_CONFIG_VERSION = 3;
+    public static final int CURRENT_CONFIG_VERSION = 4;
 
     private static final DateTimeFormatter BACKUP_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
@@ -44,12 +44,14 @@ public final class ConfigMigrator {
             int userVersion = config.getInt("config-version", 1);
             boolean oldConfig = userVersion < CURRENT_CONFIG_VERSION;
             List<String> addedKeys = new ArrayList<>();
+            List<String> removedKeys = new ArrayList<>();
 
             if (oldConfig) {
                 backup("config.yml");
             }
 
             boolean changed = addMissingKeys(config, defaults, "", addedKeys);
+            changed |= removeDeprecatedKeys(config, removedKeys);
             if (!config.isSet("config-version") || userVersion != CURRENT_CONFIG_VERSION) {
                 config.set("config-version", CURRENT_CONFIG_VERSION);
                 changed = true;
@@ -66,6 +68,9 @@ public final class ConfigMigrator {
             }
             for (String key : addedKeys) {
                 plugin.getLogger().info("Config key added or migrated: " + key);
+            }
+            for (String key : removedKeys) {
+                plugin.getLogger().info("Removed deprecated config key: " + key);
             }
         } catch (Exception ex) {
             plugin.getLogger().warning("Failed to migrate config.yml safely: " + ex.getMessage());
@@ -123,5 +128,14 @@ public final class ConfigMigrator {
         }
 
         return changed;
+    }
+
+    private boolean removeDeprecatedKeys(FileConfiguration config, List<String> removedKeys) {
+        if (!config.isSet("skin-cache")) {
+            return false;
+        }
+        config.set("skin-cache", null);
+        removedKeys.add("skin-cache");
+        return true;
     }
 }
