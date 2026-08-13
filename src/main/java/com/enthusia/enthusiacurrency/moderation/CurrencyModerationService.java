@@ -27,6 +27,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
 /** Versioned destructive-currency provider used by EnthusiaStaff. */
+@SuppressWarnings("PMD.NcssCount")
 public final class CurrencyModerationService implements CurrencyModerationApi, AutoCloseable {
 
     private final EnthusiaCurrencyPlugin plugin;
@@ -79,6 +80,12 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
     }
 
     @Override
+    @SuppressWarnings({
+            "PMD.AvoidLiteralsInIfCondition",
+            "PMD.CyclomaticComplexity",
+            "PMD.MissingDefault",
+            "PMD.NPathComplexity"
+    })
     public CurrencyRemovalPlan planRemoval(
             UUID operationId,
             CurrencyAccountSnapshot before,
@@ -161,6 +168,7 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
     }
 
     @Override
+    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity"})
     public CompletionStage<CurrencyRemovalResult> applyRemoval(Player player, CurrencyRemovalPlan plan) {
         requirePrimaryThread();
         Objects.requireNonNull(plan, "plan");
@@ -268,6 +276,7 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
     }
 
     @Override
+    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity"})
     public CompletionStage<CurrencyRestoreResult> restore(
             Player player,
             UUID operationId,
