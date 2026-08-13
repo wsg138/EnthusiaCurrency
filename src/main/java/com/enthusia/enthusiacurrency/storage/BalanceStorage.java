@@ -191,7 +191,7 @@ public class BalanceStorage {
                 ? new CachedBalance(startingBalance, 0L)
                 : current;
         if (!matchesExpected(base, expectedAmount, expectedRevision)) {
-            return base;
+            return current;
         }
         outcome.success = true;
         if (!requiresReplacement(base, replacementAmount, forceRevisionBump)) {
