@@ -6,8 +6,10 @@ import java.util.UUID;
 public interface BalanceRepository extends AutoCloseable {
 
     record StoredBalance(long amount, long revision) {
+        private static final long MINIMUM_REVISION = 0L;
+
         public StoredBalance {
-            if (revision < 0L) {
+            if (revision < MINIMUM_REVISION) {
                 throw new IllegalArgumentException("revision cannot be negative");
             }
         }
