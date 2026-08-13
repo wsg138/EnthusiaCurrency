@@ -76,7 +76,9 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         this.currencyService = new CurrencyService(this, balanceStorage, currencyManager);
         setupModerationService();
         startRuntimeServices();
-        setupVault();
+        if (!setupVault()) {
+            return;
+        }
         registerCommands();
         setupPlaceholderAPI();
         registerListeners();
@@ -235,11 +237,11 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         moderationService.close();
     }
 
-    private void setupVault() {
+    private boolean setupVault() {
         if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
             getLogger().severe("Vault not found! Disabling plugin.");
             Bukkit.getPluginManager().disablePlugin(this);
-            return;
+            return false;
         }
 
         this.tokenEconomy = new TokenEconomy(this, balanceStorage);
@@ -251,6 +253,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         } else {
             getLogger().info("Registered EnthusiaCurrency as Vault economy provider.");
         }
+        return true;
     }
 
     private void setupPlaceholderAPI() {
