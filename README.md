@@ -10,6 +10,8 @@ mvn -B -ntp verify
 
 The standalone source is mirrored into `EnthusiaStaff` and must satisfy that aggregate repository's static-analysis policy without aggregate-only product-source edits, so component parity remains verifiable.
 
+Vault is a required runtime dependency. If Vault is unavailable during startup, EnthusiaCurrency disables itself and returns from `onEnable` immediately instead of registering commands, listeners, placeholders, or scheduled runtime work after disablement.
+
 ## EnthusiaStaff moderation API
 
 EnthusiaCurrency publishes `CurrencyModerationApi` version `1` through Bukkit's `ServicesManager`. The API has no player-facing command and does not grant moderation authority: EnthusiaStaff performs permission, case, and audit authorization before invoking it.
