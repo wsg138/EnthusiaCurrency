@@ -1,0 +1,95 @@
+name: ES-X02 Vault Lifecycle Fix
+
+on:
+  push:
+    branches:
+      - package/es-x02-currency-provider
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: package/es-x02-currency-provider
+          fetch-depth: 0
+      - name: Apply fail-closed Vault startup fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/main/java/com/enthusia/enthusiacurrency/EnthusiaCurrencyPlugin.java')
+          text = path.read_text(encoding='utf-8')
+          old = '''        startRuntimeServices();
+          setupVault();
+          registerCommands();
+          '''.replace('          ', '')
+          new = '''        startRuntimeServices();
+          if (!setupVault()) {
+              return;
+          }
+          registerCommands();
+          '''.replace('          ', '')
+          if text.count(old) != 1:
+              raise SystemExit(f'onEnable Vault call match count={text.count(old)}')
+          text = text.replace(old, new)
+
+          old = '''    private void setupVault() {
+              if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
+                  getLogger().severe("Vault not found! Disabling plugin.");
+                  Bukkit.getPluginManager().disablePlugin(this);
+                  return;
+              }
+
+              this.tokenEconomy = new TokenEconomy(this, balanceStorage);
+              Bukkit.getServicesManager().register(Economy.class, tokenEconomy, this, ServicePriority.Highest);
+
+              RegisteredServiceProvider<Economy> rsp = Bukkit.getServicesManager().getRegistration(Economy.class);
+              if (rsp == null || !(rsp.getProvider() instanceof TokenEconomy)) {
+                  getLogger().warning("Another economy provider is registered. Make sure EnthusiaCurrency is the only one.");
+              } else {
+                  getLogger().info("Registered EnthusiaCurrency as Vault economy provider.");
+              }
+          }
+          '''.replace('              ', '    ')
+          new = '''    private boolean setupVault() {
+              if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
+                  getLogger().severe("Vault not found! Disabling plugin.");
+                  Bukkit.getPluginManager().disablePlugin(this);
+                  return false;
+              }
+
+              this.tokenEconomy = new TokenEconomy(this, balanceStorage);
+              Bukkit.getServicesManager().register(Economy.class, tokenEconomy, this, ServicePriority.Highest);
+
+              RegisteredServiceProvider<Economy> rsp = Bukkit.getServicesManager().getRegistration(Economy.class);
+              if (rsp == null || !(rsp.getProvider() instanceof TokenEconomy)) {
+                  getLogger().warning("Another economy provider is registered. Make sure EnthusiaCurrency is the only one.");
+              } else {
+                  getLogger().info("Registered EnthusiaCurrency as Vault economy provider.");
+              }
+              return true;
+          }
+          '''.replace('              ', '    ')
+          if text.count(old) != 1:
+              raise SystemExit(f'setupVault method match count={text.count(old)}')
+          text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm .github/workflows/es-x02-vault-lifecycle-fix.yml
+          git diff --check
+      - name: Commit lifecycle fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(es-x02): stop startup when Vault is unavailable'
+          git push origin HEAD:package/es-x02-currency-provider
