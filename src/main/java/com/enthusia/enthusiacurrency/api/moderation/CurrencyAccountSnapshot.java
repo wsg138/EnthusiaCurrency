@@ -52,30 +52,30 @@ public record CurrencyAccountSnapshot(
     }
 
     @Override
-public boolean equals(Object other) {
-    if (this == other) {
-        return true;
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof CurrencyAccountSnapshot that)) {
+            return false;
+        }
+        return sameAmounts(that) && sameIdentityAndContents(that);
     }
-    if (!(other instanceof CurrencyAccountSnapshot that)) {
-        return false;
+
+    private boolean sameAmounts(CurrencyAccountSnapshot that) {
+        return bankBalance == that.bankBalance
+                && bankRevision == that.bankRevision
+                && inventoryValue == that.inventoryValue
+                && enderChestValue == that.enderChestValue
+                && authoritativeTotal == that.authoritativeTotal;
     }
-    return sameAmounts(that) && sameIdentityAndContents(that);
-}
 
-private boolean sameAmounts(CurrencyAccountSnapshot that) {
-    return bankBalance == that.bankBalance
-            && bankRevision == that.bankRevision
-            && inventoryValue == that.inventoryValue
-            && enderChestValue == that.enderChestValue
-            && authoritativeTotal == that.authoritativeTotal;
-}
-
-private boolean sameIdentityAndContents(CurrencyAccountSnapshot that) {
-    return playerId.equals(that.playerId)
-            && Arrays.equals(inventory, that.inventory)
-            && Arrays.equals(enderChest, that.enderChest)
-            && checksum.equals(that.checksum);
-}
+    private boolean sameIdentityAndContents(CurrencyAccountSnapshot that) {
+        return playerId.equals(that.playerId)
+                && Arrays.equals(inventory, that.inventory)
+                && Arrays.equals(enderChest, that.enderChest)
+                && checksum.equals(that.checksum);
+    }
 
     @Override
     public int hashCode() {
