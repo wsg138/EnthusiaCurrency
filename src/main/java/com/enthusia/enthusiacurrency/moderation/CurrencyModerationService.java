@@ -240,17 +240,30 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             return CompletableFuture.completedFuture(committed);
         }
         return balances.flushAsync().handle((ignored, failure) -> {
-            if (failure == null) {
-                return committed;
+            if (failure != null) {
+                plugin.getLogger().severe(
+                        "Failed to durably flush an ES-X02 currency debit: " + failure.getMessage()
+                );
+                return new CurrencyRemovalResult(
+                        CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
+                        plan.amount(),
+                        plan.expectedFinalTotal(),
+                        Optional.empty(),
+                        "bank mutation is locally committed but durable flush failed"
+                );
             }
-            plugin.getLogger().severe("Failed to durably flush an ES-X02 currency debit: " + failure.getMessage());
-            return new CurrencyRemovalResult(
-                    CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
-                    plan.amount(),
-                    after.authoritativeTotal(),
-                    Optional.of(after),
-                    "bank mutation is locally committed but durable flush failed"
-            );
+            BalanceStorage.BalanceSnapshot durableBank = balances.getBalanceSnapshot(plan.playerId());
+            if (durableBank.amount() != after.bankBalance()
+                    || durableBank.revision() != after.bankRevision()) {
+                return new CurrencyRemovalResult(
+                        CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
+                        plan.amount(),
+                        plan.expectedFinalTotal(),
+                        Optional.empty(),
+                        "bank state changed while the durable debit flush was completing"
+                );
+            }
+            return committed;
         });
     }
 
@@ -347,15 +360,26 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
                 "exact before assets restored"
         );
         return balances.flushAsync().handle((ignored, failure) -> {
-            if (failure == null) {
-                return success;
+            if (failure != null) {
+                plugin.getLogger().severe(
+                        "Failed to durably flush an ES-X02 currency restore: " + failure.getMessage()
+                );
+                return new CurrencyRestoreResult(
+                        CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
+                        Optional.empty(),
+                        "restored bank state is local but durable flush failed"
+                );
             }
-            plugin.getLogger().severe("Failed to durably flush an ES-X02 currency restore: " + failure.getMessage());
-            return new CurrencyRestoreResult(
-                    CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
-                    Optional.of(restored),
-                    "restored bank state is local but durable flush failed"
-            );
+            BalanceStorage.BalanceSnapshot durableBank = balances.getBalanceSnapshot(requested.playerId());
+            if (durableBank.amount() != restored.bankBalance()
+                    || durableBank.revision() != restored.bankRevision()) {
+                return new CurrencyRestoreResult(
+                        CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
+                        Optional.empty(),
+                        "bank state changed while the durable restore flush was completing"
+                );
+            }
+            return success;
         });
     }
 
