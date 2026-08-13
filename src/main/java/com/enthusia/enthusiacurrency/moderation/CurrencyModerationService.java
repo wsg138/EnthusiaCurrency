@@ -9,13 +9,7 @@ import com.enthusia.enthusiacurrency.api.moderation.CurrencyRestoreResult;
 import com.enthusia.enthusiacurrency.api.moderation.CurrencySource;
 import com.enthusia.enthusiacurrency.storage.BalanceStorage;
 import com.enthusia.enthusiacurrency.util.CurrencyManager;
-import java.nio.ByteBuffer;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
-import java.util.Arrays;
-import java.util.EnumSet;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -27,13 +21,13 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
 /** Versioned destructive-currency provider used by EnthusiaStaff. */
-@SuppressWarnings("PMD.NcssCount")
 public final class CurrencyModerationService implements CurrencyModerationApi, AutoCloseable {
 
     private final EnthusiaCurrencyPlugin plugin;
     private final BalanceStorage balances;
     private final MovementLockRegistry locks;
-    private final CurrencyInventoryEditor inventories;
+    private final CurrencyAccountCodec accounts;
+    private final CurrencyRemovalPlanner planner;
 
     public CurrencyModerationService(
             EnthusiaCurrencyPlugin plugin,
@@ -44,7 +38,9 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.balances = Objects.requireNonNull(balances, "balances");
         this.locks = Objects.requireNonNull(locks, "locks");
-        this.inventories = new CurrencyInventoryEditor(currencyManager);
+        CurrencyInventoryEditor inventories = new CurrencyInventoryEditor(currencyManager);
+        this.accounts = new CurrencyAccountCodec(balances, inventories);
+        this.planner = new CurrencyRemovalPlanner(inventories, accounts);
     }
 
     @Override
@@ -76,16 +72,10 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
     public CurrencyAccountSnapshot snapshot(Player player) {
         requirePrimaryThread();
         requireOnline(player);
-        return capture(player);
+        return accounts.capture(player);
     }
 
     @Override
-    @SuppressWarnings({
-            "PMD.AvoidLiteralsInIfCondition",
-            "PMD.CyclomaticComplexity",
-            "PMD.MissingDefault",
-            "PMD.NPathComplexity"
-    })
     public CurrencyRemovalPlan planRemoval(
             UUID operationId,
             CurrencyAccountSnapshot before,
@@ -93,190 +83,201 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             List<CurrencySource> sourceOrder
     ) {
         requirePrimaryThread();
-        Objects.requireNonNull(operationId, "operationId");
-        Objects.requireNonNull(before, "snapshot");
-        List<CurrencySource> order = validateSourceOrder(sourceOrder);
-        if (amount <= 0L || amount > before.authoritativeTotal()) {
-            throw new IllegalArgumentException("amount must be positive and no greater than the snapshot total");
-        }
-        verifySnapshotChecksum(before);
-
-        ItemStack[] inventory = decode(before.inventory());
-        ItemStack[] enderChest = decode(before.enderChest());
-        long beforeInventoryValue = inventories.value(inventory);
-        long beforeEnderValue = inventories.value(enderChest);
-        if (beforeInventoryValue != before.inventoryValue()
-                || beforeEnderValue != before.enderChestValue()) {
-            throw new IllegalArgumentException("snapshot physical-currency totals do not match serialized contents");
-        }
-
-        long remaining = amount;
-        long bankBalance = before.bankBalance();
-        for (CurrencySource source : order) {
-            if (remaining == 0L) {
-                break;
-            }
-            switch (source) {
-                case BANK -> {
-                    long taken = Math.min(bankBalance, remaining);
-                    bankBalance -= taken;
-                    remaining -= taken;
-                }
-                case INVENTORY -> remaining -= inventories.removeUpTo(inventory, remaining);
-                case ENDER_CHEST -> remaining -= inventories.removeUpTo(enderChest, remaining);
-            }
-        }
-        if (remaining != 0L) {
-            throw new IllegalArgumentException(
-                    "exact removal cannot be represented by the available currency denominations"
-            );
-        }
-
-        byte[] replacementInventory = ItemStack.serializeItemsAsBytes(inventory);
-        byte[] replacementEnder = ItemStack.serializeItemsAsBytes(enderChest);
-        long inventoryValue = inventories.value(inventory);
-        long enderValue = inventories.value(enderChest);
-        long expectedTotal = total(bankBalance, inventoryValue, enderValue);
-        if (expectedTotal != before.authoritativeTotal() - amount) {
-            throw new IllegalStateException("planned debit did not preserve exact total arithmetic");
-        }
-        long replacementRevision = before.bankRevision();
-        if (bankBalance != before.bankBalance()) {
-            replacementRevision = Math.addExact(replacementRevision, 1L);
-        }
-        String replacementChecksum = checksum(
-                before.playerId(),
-                bankBalance,
-                replacementRevision,
-                replacementInventory,
-                replacementEnder,
-                inventoryValue,
-                enderValue
-        );
-        return new CurrencyRemovalPlan(
-                operationId,
-                before.playerId(),
-                amount,
-                before,
-                bankBalance,
-                replacementInventory,
-                replacementEnder,
-                expectedTotal,
-                replacementChecksum,
-                order
-        );
+        return planner.plan(operationId, before, amount, sourceOrder);
     }
 
     @Override
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity"})
     public CompletionStage<CurrencyRemovalResult> applyRemoval(Player player, CurrencyRemovalPlan plan) {
         requirePrimaryThread();
         Objects.requireNonNull(plan, "plan");
+        Optional<CurrencyRemovalResult> requestFailure = validateRemovalRequest(player, plan);
+        if (requestFailure.isPresent()) {
+            return CompletableFuture.completedFuture(requestFailure.orElseThrow());
+        }
+
+        CurrencyAccountSnapshot current = accounts.capture(player);
+        Optional<CurrencyRemovalResult> stateOutcome = evaluateRemovalState(current, plan);
+        if (stateOutcome.isPresent()) {
+            return CompletableFuture.completedFuture(stateOutcome.orElseThrow());
+        }
+        return applyFreshRemoval(player, plan, current);
+    }
+
+    private Optional<CurrencyRemovalResult> validateRemovalRequest(
+            Player player,
+            CurrencyRemovalPlan plan
+    ) {
         if (!isOnlineMatch(player, plan.playerId())) {
-            return completedRemoval(CurrencyRemovalResult.Status.PLAYER_OFFLINE, 0L, plan.before().authoritativeTotal(), Optional.empty(), "player is not online on this backend");
+            return Optional.of(removalResult(
+                    CurrencyRemovalResult.Status.PLAYER_OFFLINE,
+                    0L,
+                    plan.before().authoritativeTotal(),
+                    Optional.empty(),
+                    "player is not online on this backend"
+            ));
         }
         if (!locks.isOwnedBy(plan.playerId(), plan.operationId())) {
-            return completedRemoval(CurrencyRemovalResult.Status.LOCK_REQUIRED, 0L, plan.before().authoritativeTotal(), Optional.empty(), "operation does not own the movement lease");
+            return Optional.of(removalResult(
+                    CurrencyRemovalResult.Status.LOCK_REQUIRED,
+                    0L,
+                    plan.before().authoritativeTotal(),
+                    Optional.empty(),
+                    "operation does not own the movement lease"
+            ));
         }
+        return Optional.empty();
+    }
 
-        CurrencyAccountSnapshot current = capture(player);
-        if (current.checksum().equals(plan.replacementChecksum())
-                && current.authoritativeTotal() == plan.expectedFinalTotal()) {
-            return completedRemoval(CurrencyRemovalResult.Status.COMMITTED, plan.amount(), current.authoritativeTotal(), Optional.of(current), "operation was already committed");
+    private Optional<CurrencyRemovalResult> evaluateRemovalState(
+            CurrencyAccountSnapshot current,
+            CurrencyRemovalPlan plan
+    ) {
+        if (isCommittedState(current, plan)) {
+            return Optional.of(removalResult(
+                    CurrencyRemovalResult.Status.COMMITTED,
+                    plan.amount(),
+                    current.authoritativeTotal(),
+                    Optional.of(current),
+                    "operation was already committed"
+            ));
         }
         if (!current.checksum().equals(plan.before().checksum())) {
-            return completedRemoval(CurrencyRemovalResult.Status.STALE, 0L, current.authoritativeTotal(), Optional.of(current), "account state changed after planning");
+            return Optional.of(removalResult(
+                    CurrencyRemovalResult.Status.STALE,
+                    0L,
+                    current.authoritativeTotal(),
+                    Optional.of(current),
+                    "account state changed after planning"
+            ));
         }
-        if (!validPlan(plan)) {
-            return completedRemoval(CurrencyRemovalResult.Status.INVALID_PLAN, 0L, current.authoritativeTotal(), Optional.of(current), "plan does not match a fresh provider calculation");
+        if (!planner.validPlan(plan)) {
+            return Optional.of(removalResult(
+                    CurrencyRemovalResult.Status.INVALID_PLAN,
+                    0L,
+                    current.authoritativeTotal(),
+                    Optional.of(current),
+                    "plan does not match a fresh provider calculation"
+            ));
         }
+        return Optional.empty();
+    }
 
-        ItemStack[] replacementInventory;
-        ItemStack[] replacementEnder;
-        try {
-            replacementInventory = decode(plan.replacementInventory());
-            replacementEnder = decode(plan.replacementEnderChest());
-        } catch (RuntimeException exception) {
-            return completedRemoval(CurrencyRemovalResult.Status.INVALID_PLAN, 0L, current.authoritativeTotal(), Optional.of(current), "replacement inventory payload is invalid");
-        }
-
-        try {
-            player.getInventory().setContents(replacementInventory);
-            player.getEnderChest().setContents(replacementEnder);
-        } catch (RuntimeException exception) {
-            return compensateRemoval(
-                    player,
-                    current,
-                    "physical mutation failed before bank commit"
+    private CompletionStage<CurrencyRemovalResult> applyFreshRemoval(
+            Player player,
+            CurrencyRemovalPlan plan,
+            CurrencyAccountSnapshot current
+    ) {
+        Optional<PhysicalContents> replacement = decodeRemovalContents(plan);
+        if (replacement.isEmpty()) {
+            return completedRemoval(
+                    CurrencyRemovalResult.Status.INVALID_PLAN,
+                    0L,
+                    current.authoritativeTotal(),
+                    Optional.of(current),
+                    "replacement inventory payload is invalid"
             );
         }
+        if (!replacePhysical(player, replacement.orElseThrow())) {
+            return compensateRemoval(player, current, "physical mutation failed before bank commit");
+        }
+        if (!replaceBankForRemoval(current, plan)) {
+            return compensateRemoval(player, current, "bank revision changed during apply");
+        }
+        return verifyAndFlushRemoval(player, plan, current);
+    }
 
-        boolean bankChanged = plan.replacementBankBalance() != current.bankBalance();
-        if (!balances.replaceIfCurrent(
+    private boolean replaceBankForRemoval(
+            CurrencyAccountSnapshot current,
+            CurrencyRemovalPlan plan
+    ) {
+        return balances.replaceIfCurrent(
                 current.playerId(),
                 current.bankBalance(),
                 current.bankRevision(),
                 plan.replacementBankBalance(),
                 false
-        )) {
-            return compensateRemoval(
-                    player,
-                    current,
-                    "bank revision changed during apply"
+        );
+    }
+
+    private CompletionStage<CurrencyRemovalResult> verifyAndFlushRemoval(
+            Player player,
+            CurrencyRemovalPlan plan,
+            CurrencyAccountSnapshot before
+    ) {
+        Optional<CurrencyAccountSnapshot> observed = captureSafely(player);
+        if (observed.isEmpty()) {
+            return completedRemoval(
+                    CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
+                    plan.amount(),
+                    plan.expectedFinalTotal(),
+                    Optional.empty(),
+                    "post-commit account verification failed"
             );
         }
-
-        CurrencyAccountSnapshot after;
-        try {
-            after = capture(player);
-        } catch (RuntimeException exception) {
-            return completedRemoval(CurrencyRemovalResult.Status.QUARANTINE_REQUIRED, plan.amount(), plan.expectedFinalTotal(), Optional.empty(), "post-commit account verification failed");
+        CurrencyAccountSnapshot after = observed.orElseThrow();
+        if (!isCommittedState(after, plan)) {
+            return completedRemoval(
+                    CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
+                    plan.amount(),
+                    after.authoritativeTotal(),
+                    Optional.of(after),
+                    "post-commit account state did not match the persisted exact plan"
+            );
         }
-        if (!after.checksum().equals(plan.replacementChecksum())
-                || after.authoritativeTotal() != plan.expectedFinalTotal()) {
-            return completedRemoval(CurrencyRemovalResult.Status.QUARANTINE_REQUIRED, plan.amount(), after.authoritativeTotal(), Optional.of(after), "post-commit account state did not match the persisted exact plan");
-        }
-
-        CurrencyRemovalResult committed = new CurrencyRemovalResult(
+        CurrencyRemovalResult committed = removalResult(
                 CurrencyRemovalResult.Status.COMMITTED,
                 plan.amount(),
                 after.authoritativeTotal(),
                 Optional.of(after),
                 "exact removal committed"
         );
-        if (!bankChanged) {
+        if (plan.replacementBankBalance() == before.bankBalance()) {
             return CompletableFuture.completedFuture(committed);
         }
-        return balances.flushAsync().handle((ignored, failure) -> {
-            if (failure != null) {
-                plugin.getLogger().severe(
-                        "Failed to durably flush an ES-X02 currency debit: " + failure.getMessage()
-                );
-                return new CurrencyRemovalResult(
-                        CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
-                        plan.amount(),
-                        plan.expectedFinalTotal(),
-                        Optional.empty(),
-                        "bank mutation is locally committed but durable flush failed"
-                );
-            }
-            BalanceStorage.BalanceSnapshot durableBank = balances.getBalanceSnapshot(plan.playerId());
-            if (durableBank.amount() != after.bankBalance()
-                    || durableBank.revision() != after.bankRevision()) {
-                return new CurrencyRemovalResult(
-                        CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
-                        plan.amount(),
-                        plan.expectedFinalTotal(),
-                        Optional.empty(),
-                        "bank state changed while the durable debit flush was completing"
-                );
-            }
-            return committed;
-        });
+        return flushRemoval(plan, after, committed);
+    }
+
+    private CompletionStage<CurrencyRemovalResult> flushRemoval(
+            CurrencyRemovalPlan plan,
+            CurrencyAccountSnapshot after,
+            CurrencyRemovalResult committed
+    ) {
+        return balances.flushAsync().handle(
+                (ignored, failure) -> durableRemovalOutcome(plan, after, committed, failure)
+        );
+    }
+
+    private CurrencyRemovalResult durableRemovalOutcome(
+            CurrencyRemovalPlan plan,
+            CurrencyAccountSnapshot after,
+            CurrencyRemovalResult committed,
+            Throwable failure
+    ) {
+        if (failure != null) {
+            plugin.getLogger().severe(
+                    "Failed to durably flush an ES-X02 currency debit: " + failure.getMessage()
+            );
+            return removalResult(
+                    CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
+                    plan.amount(),
+                    plan.expectedFinalTotal(),
+                    Optional.empty(),
+                    "bank mutation is locally committed but durable flush failed"
+            );
+        }
+        if (!bankStateMatches(plan.playerId(), after)) {
+            return removalResult(
+                    CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
+                    plan.amount(),
+                    plan.expectedFinalTotal(),
+                    Optional.empty(),
+                    "bank state changed while the durable debit flush was completing"
+            );
+        }
+        return committed;
     }
 
     @Override
-    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity"})
     public CompletionStage<CurrencyRestoreResult> restore(
             Player player,
             UUID operationId,
@@ -287,109 +288,170 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
         Objects.requireNonNull(operationId, "operationId");
         Objects.requireNonNull(requested, "snapshot");
         Objects.requireNonNull(expectedCurrentChecksum, "expectedCurrentChecksum");
+        Optional<CurrencyRestoreResult> requestFailure = validateRestoreRequest(
+                player,
+                operationId,
+                requested
+        );
+        if (requestFailure.isPresent()) {
+            return CompletableFuture.completedFuture(requestFailure.orElseThrow());
+        }
+        accounts.verifySnapshotChecksum(requested);
+        return restoreCurrentState(player, operationId, requested, expectedCurrentChecksum);
+    }
+
+    private Optional<CurrencyRestoreResult> validateRestoreRequest(
+            Player player,
+            UUID operationId,
+            CurrencyAccountSnapshot requested
+    ) {
         if (!isOnlineMatch(player, requested.playerId())) {
-            return CompletableFuture.completedFuture(new CurrencyRestoreResult(
+            return Optional.of(restoreResult(
                     CurrencyRestoreResult.Status.PLAYER_OFFLINE,
+                    Optional.empty(),
                     "player is not online on this backend"
             ));
         }
         if (!locks.isOwnedBy(requested.playerId(), operationId)) {
-            return CompletableFuture.completedFuture(new CurrencyRestoreResult(
+            return Optional.of(restoreResult(
                     CurrencyRestoreResult.Status.LOCK_REQUIRED,
+                    Optional.empty(),
                     "operation does not own the movement lease"
             ));
         }
-        verifySnapshotChecksum(requested);
+        return Optional.empty();
+    }
 
-        CurrencyAccountSnapshot current = capture(player);
-        if (sameAssets(current, requested)) {
-            return CompletableFuture.completedFuture(new CurrencyRestoreResult(
+    private CompletionStage<CurrencyRestoreResult> restoreCurrentState(
+            Player player,
+            UUID operationId,
+            CurrencyAccountSnapshot requested,
+            String expectedCurrentChecksum
+    ) {
+        CurrencyAccountSnapshot current = accounts.capture(player);
+        if (accounts.sameAssets(current, requested)) {
+            return CompletableFuture.completedFuture(restoreResult(
                     CurrencyRestoreResult.Status.RESTORED,
                     Optional.of(current),
                     "requested assets were already restored"
             ));
         }
         if (!current.checksum().equals(expectedCurrentChecksum)) {
-            return CompletableFuture.completedFuture(new CurrencyRestoreResult(
+            return CompletableFuture.completedFuture(restoreResult(
                     CurrencyRestoreResult.Status.STALE,
                     Optional.of(current),
                     "account state changed after the removal result being restored"
             ));
         }
+        return applyFreshRestore(player, requested, current);
+    }
 
-        ItemStack[] requestedInventory;
-        ItemStack[] requestedEnder;
-        try {
-            requestedInventory = decode(requested.inventory());
-            requestedEnder = decode(requested.enderChest());
-        } catch (RuntimeException exception) {
-            return CompletableFuture.completedFuture(new CurrencyRestoreResult(
+    private CompletionStage<CurrencyRestoreResult> applyFreshRestore(
+            Player player,
+            CurrencyAccountSnapshot requested,
+            CurrencyAccountSnapshot current
+    ) {
+        Optional<PhysicalContents> replacement = decodeSnapshotContents(requested);
+        if (replacement.isEmpty()) {
+            return CompletableFuture.completedFuture(restoreResult(
                     CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
                     Optional.of(current),
                     "stored restore snapshot cannot be decoded"
             ));
         }
-
-        try {
-            player.getInventory().setContents(requestedInventory);
-            player.getEnderChest().setContents(requestedEnder);
-        } catch (RuntimeException exception) {
+        if (!replacePhysical(player, replacement.orElseThrow())) {
             return CompletableFuture.completedFuture(compensateRestore(
                     player,
                     current,
                     "physical restore failed before bank commit"
             ));
         }
-
-        if (!balances.replaceIfCurrent(
-                current.playerId(),
-                current.bankBalance(),
-                current.bankRevision(),
-                requested.bankBalance(),
-                true
-        )) {
+        if (!replaceBankForRestore(current, requested)) {
             return CompletableFuture.completedFuture(compensateRestore(
                     player,
                     current,
                     "bank revision changed during restore"
             ));
         }
+        return verifyAndFlushRestore(player, requested, current);
+    }
 
-        CurrencyAccountSnapshot restored = capture(player);
-        if (!sameAssets(restored, requested) || restored.bankRevision() <= current.bankRevision()) {
-            return CompletableFuture.completedFuture(new CurrencyRestoreResult(
+    private boolean replaceBankForRestore(
+            CurrencyAccountSnapshot current,
+            CurrencyAccountSnapshot requested
+    ) {
+        return balances.replaceIfCurrent(
+                current.playerId(),
+                current.bankBalance(),
+                current.bankRevision(),
+                requested.bankBalance(),
+                true
+        );
+    }
+
+    private CompletionStage<CurrencyRestoreResult> verifyAndFlushRestore(
+            Player player,
+            CurrencyAccountSnapshot requested,
+            CurrencyAccountSnapshot before
+    ) {
+        Optional<CurrencyAccountSnapshot> observed = captureSafely(player);
+        if (observed.isEmpty()) {
+            return CompletableFuture.completedFuture(restoreResult(
+                    CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
+                    Optional.empty(),
+                    "restored account verification failed"
+            ));
+        }
+        CurrencyAccountSnapshot restored = observed.orElseThrow();
+        if (!isVerifiedRestore(restored, requested, before)) {
+            return CompletableFuture.completedFuture(restoreResult(
                     CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
                     Optional.of(restored),
                     "restored assets or monotonic bank revision could not be verified"
             ));
         }
-        CurrencyRestoreResult success = new CurrencyRestoreResult(
+        CurrencyRestoreResult success = restoreResult(
                 CurrencyRestoreResult.Status.RESTORED,
                 Optional.of(restored),
                 "exact before assets restored"
         );
-        return balances.flushAsync().handle((ignored, failure) -> {
-            if (failure != null) {
-                plugin.getLogger().severe(
-                        "Failed to durably flush an ES-X02 currency restore: " + failure.getMessage()
-                );
-                return new CurrencyRestoreResult(
-                        CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
-                        Optional.empty(),
-                        "restored bank state is local but durable flush failed"
-                );
-            }
-            BalanceStorage.BalanceSnapshot durableBank = balances.getBalanceSnapshot(requested.playerId());
-            if (durableBank.amount() != restored.bankBalance()
-                    || durableBank.revision() != restored.bankRevision()) {
-                return new CurrencyRestoreResult(
-                        CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
-                        Optional.empty(),
-                        "bank state changed while the durable restore flush was completing"
-                );
-            }
-            return success;
-        });
+        return flushRestore(requested, restored, success);
+    }
+
+    private CompletionStage<CurrencyRestoreResult> flushRestore(
+            CurrencyAccountSnapshot requested,
+            CurrencyAccountSnapshot restored,
+            CurrencyRestoreResult success
+    ) {
+        return balances.flushAsync().handle(
+                (ignored, failure) -> durableRestoreOutcome(requested, restored, success, failure)
+        );
+    }
+
+    private CurrencyRestoreResult durableRestoreOutcome(
+            CurrencyAccountSnapshot requested,
+            CurrencyAccountSnapshot restored,
+            CurrencyRestoreResult success,
+            Throwable failure
+    ) {
+        if (failure != null) {
+            plugin.getLogger().severe(
+                    "Failed to durably flush an ES-X02 currency restore: " + failure.getMessage()
+            );
+            return restoreResult(
+                    CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
+                    Optional.empty(),
+                    "restored bank state is local but durable flush failed"
+            );
+        }
+        if (!bankStateMatches(requested.playerId(), restored)) {
+            return restoreResult(
+                    CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
+                    Optional.empty(),
+                    "bank state changed while the durable restore flush was completing"
+            );
+        }
+        return success;
     }
 
     @Override
@@ -397,132 +459,53 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
         locks.clear();
     }
 
-    private CurrencyAccountSnapshot capture(Player player) {
-        BalanceStorage.BalanceSnapshot bank = balances.getBalanceSnapshot(player.getUniqueId());
-        byte[] inventory = ItemStack.serializeItemsAsBytes(player.getInventory().getContents());
-        byte[] ender = ItemStack.serializeItemsAsBytes(player.getEnderChest().getContents());
-        ItemStack[] inventoryItems = decode(inventory);
-        ItemStack[] enderItems = decode(ender);
-        long inventoryValue = inventories.value(inventoryItems);
-        long enderValue = inventories.value(enderItems);
-        long total = total(bank.amount(), inventoryValue, enderValue);
-        String checksum = checksum(
-                player.getUniqueId(),
-                bank.amount(),
-                bank.revision(),
-                inventory,
-                ender,
-                inventoryValue,
-                enderValue
-        );
-        return new CurrencyAccountSnapshot(
-                player.getUniqueId(),
-                bank.amount(),
-                bank.revision(),
-                inventory,
-                ender,
-                inventoryValue,
-                enderValue,
-                total,
-                checksum
-        );
+    private Optional<PhysicalContents> decodeRemovalContents(CurrencyRemovalPlan plan) {
+        try {
+            return Optional.of(new PhysicalContents(
+                    accounts.decode(plan.replacementInventory()),
+                    accounts.decode(plan.replacementEnderChest())
+            ));
+        } catch (RuntimeException exception) {
+            return Optional.empty();
+        }
     }
 
-    private boolean validPlan(CurrencyRemovalPlan supplied) {
+    private Optional<PhysicalContents> decodeSnapshotContents(CurrencyAccountSnapshot snapshot) {
         try {
-            CurrencyRemovalPlan calculated = planRemoval(
-                    supplied.operationId(),
-                    supplied.before(),
-                    supplied.amount(),
-                    supplied.sourceOrder()
-            );
-            return calculated.playerId().equals(supplied.playerId())
-                    && calculated.replacementBankBalance() == supplied.replacementBankBalance()
-                    && calculated.expectedFinalTotal() == supplied.expectedFinalTotal()
-                    && calculated.replacementChecksum().equals(supplied.replacementChecksum())
-                    && calculated.sourceOrder().equals(supplied.sourceOrder())
-                    && Arrays.equals(calculated.replacementInventory(), supplied.replacementInventory())
-                    && Arrays.equals(calculated.replacementEnderChest(), supplied.replacementEnderChest());
-        } catch (IllegalArgumentException | IllegalStateException exception) {
+            return Optional.of(new PhysicalContents(
+                    accounts.decode(snapshot.inventory()),
+                    accounts.decode(snapshot.enderChest())
+            ));
+        } catch (RuntimeException exception) {
+            return Optional.empty();
+        }
+    }
+
+    private static boolean replacePhysical(Player player, PhysicalContents replacement) {
+        try {
+            player.getInventory().setContents(replacement.inventory());
+            player.getEnderChest().setContents(replacement.enderChest());
+            return true;
+        } catch (RuntimeException exception) {
             return false;
         }
     }
 
-    private void verifySnapshotChecksum(CurrencyAccountSnapshot snapshot) {
-        String expected = checksum(
-                snapshot.playerId(),
-                snapshot.bankBalance(),
-                snapshot.bankRevision(),
-                snapshot.inventory(),
-                snapshot.enderChest(),
-                snapshot.inventoryValue(),
-                snapshot.enderChestValue()
-        );
-        if (!expected.equals(snapshot.checksum())) {
-            throw new IllegalArgumentException("snapshot checksum does not match its exact account state");
-        }
+    private boolean bankStateMatches(UUID playerId, CurrencyAccountSnapshot expected) {
+        BalanceStorage.BalanceSnapshot durableBank = balances.getBalanceSnapshot(playerId);
+        return durableBank.amount() == expected.bankBalance()
+                && durableBank.revision() == expected.bankRevision();
     }
 
-    private static List<CurrencySource> validateSourceOrder(List<CurrencySource> sourceOrder) {
-        List<CurrencySource> order = List.copyOf(Objects.requireNonNull(sourceOrder, "sourceOrder"));
-        if (order.size() != CurrencySource.values().length
-                || !EnumSet.copyOf(order).equals(EnumSet.allOf(CurrencySource.class))) {
-            throw new IllegalArgumentException("sourceOrder must contain each currency source exactly once");
-        }
-        return order;
-    }
-
-    private static boolean sameAssets(CurrencyAccountSnapshot first, CurrencyAccountSnapshot second) {
-        return first.playerId().equals(second.playerId())
-                && first.bankBalance() == second.bankBalance()
-                && first.inventoryValue() == second.inventoryValue()
-                && first.enderChestValue() == second.enderChestValue()
-                && first.authoritativeTotal() == second.authoritativeTotal()
-                && Arrays.equals(first.inventory(), second.inventory())
-                && Arrays.equals(first.enderChest(), second.enderChest());
-    }
-
-    private static ItemStack[] decode(byte[] bytes) {
-        return ItemStack.deserializeItemsFromBytes(bytes);
-    }
-
-    private static long total(long bank, long inventory, long ender) {
-        return Math.addExact(bank, Math.addExact(inventory, ender));
-    }
-
-    private static String checksum(
-            UUID playerId,
-            long bankBalance,
-            long bankRevision,
-            byte[] inventory,
-            byte[] enderChest,
-            long inventoryValue,
-            long enderValue
-    ) {
+    private Optional<CurrencyAccountSnapshot> captureSafely(Player player) {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            updateLong(digest, playerId.getMostSignificantBits());
-            updateLong(digest, playerId.getLeastSignificantBits());
-            updateLong(digest, bankBalance);
-            updateLong(digest, bankRevision);
-            updateBytes(digest, inventory);
-            updateBytes(digest, enderChest);
-            updateLong(digest, inventoryValue);
-            updateLong(digest, enderValue);
-            updateLong(digest, total(bankBalance, inventoryValue, enderValue));
-            return HexFormat.of().formatHex(digest.digest());
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is unavailable", exception);
+            return Optional.of(accounts.capture(player));
+        } catch (RuntimeException exception) {
+            plugin.getLogger().severe(
+                    "ES-X02 could not observe exact currency state: " + exception.getMessage()
+            );
+            return Optional.empty();
         }
-    }
-
-    private static void updateLong(MessageDigest digest, long value) {
-        digest.update(ByteBuffer.allocate(Long.BYTES).putLong(value).array());
-    }
-
-    private static void updateBytes(MessageDigest digest, byte[] value) {
-        updateLong(digest, value.length);
-        digest.update(value);
     }
 
     private CompletionStage<CurrencyRemovalResult> compensateRemoval(
@@ -531,7 +514,7 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             String failureDetail
     ) {
         Optional<CurrencyAccountSnapshot> observed = restorePhysicalAndObserve(player, before);
-        if (observed.isPresent() && sameAssets(observed.orElseThrow(), before)) {
+        if (observed.isPresent() && accounts.sameAssets(observed.orElseThrow(), before)) {
             CurrencyAccountSnapshot rolledBack = observed.orElseThrow();
             return completedRemoval(
                     CurrencyRemovalResult.Status.FAILED_ROLLED_BACK,
@@ -558,14 +541,14 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             String failureDetail
     ) {
         Optional<CurrencyAccountSnapshot> observed = restorePhysicalAndObserve(player, before);
-        if (observed.isPresent() && sameAssets(observed.orElseThrow(), before)) {
-            return new CurrencyRestoreResult(
+        if (observed.isPresent() && accounts.sameAssets(observed.orElseThrow(), before)) {
+            return restoreResult(
                     CurrencyRestoreResult.Status.FAILED_ROLLED_BACK,
                     observed,
                     failureDetail + "; exact physical state was restored"
             );
         }
-        return new CurrencyRestoreResult(
+        return restoreResult(
                 CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
                 observed,
                 failureDetail + "; exact rollback could not be verified"
@@ -576,22 +559,28 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             Player player,
             CurrencyAccountSnapshot snapshot
     ) {
-        try {
-            player.getInventory().setContents(decode(snapshot.inventory()));
-            player.getEnderChest().setContents(decode(snapshot.enderChest()));
-        } catch (RuntimeException exception) {
-            plugin.getLogger().severe(
-                    "ES-X02 physical compensation failed: " + exception.getMessage()
-            );
+        Optional<PhysicalContents> beforeContents = decodeSnapshotContents(snapshot);
+        if (beforeContents.isEmpty() || !replacePhysical(player, beforeContents.orElseThrow())) {
+            plugin.getLogger().severe("ES-X02 physical compensation failed.");
         }
-        try {
-            return Optional.of(capture(player));
-        } catch (RuntimeException exception) {
-            plugin.getLogger().severe(
-                    "ES-X02 could not observe state after compensation: " + exception.getMessage()
-            );
-            return Optional.empty();
-        }
+        return captureSafely(player);
+    }
+
+    private static boolean isCommittedState(
+            CurrencyAccountSnapshot current,
+            CurrencyRemovalPlan plan
+    ) {
+        return current.checksum().equals(plan.replacementChecksum())
+                && current.authoritativeTotal() == plan.expectedFinalTotal();
+    }
+
+    private boolean isVerifiedRestore(
+            CurrencyAccountSnapshot restored,
+            CurrencyAccountSnapshot requested,
+            CurrencyAccountSnapshot before
+    ) {
+        return accounts.sameAssets(restored, requested)
+                && restored.bankRevision() > before.bankRevision();
     }
 
     private static CompletionStage<CurrencyRemovalResult> completedRemoval(
@@ -601,13 +590,27 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             Optional<CurrencyAccountSnapshot> state,
             String detail
     ) {
-        return CompletableFuture.completedFuture(new CurrencyRemovalResult(
-                status,
-                amountRemoved,
-                finalTotal,
-                state,
-                detail
-        ));
+        return CompletableFuture.completedFuture(
+                removalResult(status, amountRemoved, finalTotal, state, detail)
+        );
+    }
+
+    private static CurrencyRemovalResult removalResult(
+            CurrencyRemovalResult.Status status,
+            long amountRemoved,
+            long finalTotal,
+            Optional<CurrencyAccountSnapshot> state,
+            String detail
+    ) {
+        return new CurrencyRemovalResult(status, amountRemoved, finalTotal, state, detail);
+    }
+
+    private static CurrencyRestoreResult restoreResult(
+            CurrencyRestoreResult.Status status,
+            Optional<CurrencyAccountSnapshot> state,
+            String detail
+    ) {
+        return new CurrencyRestoreResult(status, state, detail);
     }
 
     private static boolean isOnlineMatch(Player player, UUID playerId) {
@@ -622,7 +625,12 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
 
     private static void requirePrimaryThread() {
         if (!Bukkit.isPrimaryThread()) {
-            throw new IllegalStateException("currency moderation API must be called on the primary server thread");
+            throw new IllegalStateException(
+                    "currency moderation API must be called on the primary server thread"
+            );
         }
+    }
+
+    private record PhysicalContents(ItemStack[] inventory, ItemStack[] enderChest) {
     }
 }
