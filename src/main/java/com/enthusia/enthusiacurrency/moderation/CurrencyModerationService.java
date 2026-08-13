@@ -18,17 +18,16 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
 
 /** Versioned destructive-currency provider used by EnthusiaStaff. */
 public final class CurrencyModerationService implements CurrencyModerationApi, AutoCloseable {
 
-    private final EnthusiaCurrencyPlugin plugin;
     private final BalanceStorage balances;
     private final MovementLockRegistry locks;
     private final CurrencyAccountCodec accounts;
     private final CurrencyRemovalPlanner planner;
-    private final MainThreadCurrencyVerifier verifier;
+    private final CurrencyPhysicalAccountEditor physical;
+    private final CurrencyDurabilityVerifier durability;
 
     public CurrencyModerationService(
             EnthusiaCurrencyPlugin plugin,
@@ -36,13 +35,14 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             CurrencyManager currencyManager,
             MovementLockRegistry locks
     ) {
-        this.plugin = Objects.requireNonNull(plugin, "plugin");
+        EnthusiaCurrencyPlugin checkedPlugin = Objects.requireNonNull(plugin, "plugin");
         this.balances = Objects.requireNonNull(balances, "balances");
         this.locks = Objects.requireNonNull(locks, "locks");
         CurrencyInventoryEditor inventories = new CurrencyInventoryEditor(currencyManager);
         this.accounts = new CurrencyAccountCodec(balances, inventories);
         this.planner = new CurrencyRemovalPlanner(inventories, accounts);
-        this.verifier = new MainThreadCurrencyVerifier(plugin, accounts);
+        this.physical = new CurrencyPhysicalAccountEditor(checkedPlugin, accounts);
+        this.durability = new CurrencyDurabilityVerifier(checkedPlugin, balances, accounts);
     }
 
     @Override
@@ -169,8 +169,11 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             CurrencyRemovalPlan plan,
             CurrencyAccountSnapshot current
     ) {
-        Optional<PhysicalContents> replacement = decodeRemovalContents(plan);
-        if (replacement.isEmpty()) {
+        CurrencyPhysicalAccountEditor.ReplacementAttempt replacement = physical.applyRemoval(
+                player,
+                plan
+        );
+        if (replacement == CurrencyPhysicalAccountEditor.ReplacementAttempt.INVALID_PAYLOAD) {
             return completedRemoval(
                     CurrencyRemovalResult.Status.INVALID_PLAN,
                     0L,
@@ -179,11 +182,19 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
                     "replacement inventory payload is invalid"
             );
         }
-        if (!replacePhysical(player, replacement.orElseThrow())) {
-            return compensateRemoval(player, current, "physical mutation failed before bank commit");
+        if (replacement == CurrencyPhysicalAccountEditor.ReplacementAttempt.MUTATION_FAILED) {
+            return physical.compensateRemoval(
+                    player,
+                    current,
+                    "physical mutation failed before bank commit"
+            );
         }
         if (!replaceBankForRemoval(current, plan)) {
-            return compensateRemoval(player, current, "bank revision changed during apply");
+            return physical.compensateRemoval(
+                    player,
+                    current,
+                    "bank revision changed during apply"
+            );
         }
         return verifyAndFlushRemoval(player, plan, current);
     }
@@ -206,7 +217,7 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             CurrencyRemovalPlan plan,
             CurrencyAccountSnapshot before
     ) {
-        Optional<CurrencyAccountSnapshot> observed = captureSafely(player);
+        Optional<CurrencyAccountSnapshot> observed = physical.captureSafely(player);
         if (observed.isEmpty()) {
             return completedRemoval(
                     CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
@@ -236,85 +247,7 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
         if (plan.replacementBankBalance() == before.bankBalance()) {
             return CompletableFuture.completedFuture(committed);
         }
-        return flushRemoval(player, plan, after, committed);
-    }
-
-    private CompletionStage<CurrencyRemovalResult> flushRemoval(
-            Player player,
-            CurrencyRemovalPlan plan,
-            CurrencyAccountSnapshot after,
-            CurrencyRemovalResult committed
-    ) {
-        return balances.flushAsync().handle((ignored, failure) -> failure)
-                .thenCompose(failure -> finishRemovalFlush(
-                        player,
-                        plan,
-                        after,
-                        committed,
-                        failure
-                ));
-    }
-
-    private CompletionStage<CurrencyRemovalResult> finishRemovalFlush(
-            Player player,
-            CurrencyRemovalPlan plan,
-            CurrencyAccountSnapshot after,
-            CurrencyRemovalResult committed,
-            Throwable failure
-    ) {
-        if (failure != null) {
-            plugin.getLogger().severe(
-                    "Failed to durably flush an ES-X02 currency debit: " + failure.getMessage()
-            );
-            return completedRemoval(
-                    CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
-                    plan.amount(),
-                    plan.expectedFinalTotal(),
-                    Optional.empty(),
-                    "bank mutation is locally committed but durable flush failed"
-            );
-        }
-        return verifier.capture(player, plan.playerId()).handle(
-                (durableState, verificationFailure) -> durableRemovalOutcome(
-                        plan,
-                        after,
-                        committed,
-                        durableState,
-                        verificationFailure
-                )
-        );
-    }
-
-    private CurrencyRemovalResult durableRemovalOutcome(
-            CurrencyRemovalPlan plan,
-            CurrencyAccountSnapshot after,
-            CurrencyRemovalResult committed,
-            CurrencyAccountSnapshot durableState,
-            Throwable verificationFailure
-    ) {
-        if (verificationFailure != null) {
-            plugin.getLogger().severe(
-                    "Failed exact post-flush ES-X02 debit verification: "
-                            + verificationFailure.getMessage()
-            );
-            return removalResult(
-                    CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
-                    plan.amount(),
-                    plan.expectedFinalTotal(),
-                    Optional.empty(),
-                    "durable debit could not be reverified on the primary thread"
-            );
-        }
-        if (!durableState.equals(after)) {
-            return removalResult(
-                    CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
-                    plan.amount(),
-                    durableState.authoritativeTotal(),
-                    Optional.of(durableState),
-                    "account state changed while the durable debit flush was completing"
-            );
-        }
-        return committed;
+        return durability.flushRemoval(player, plan, after, committed);
     }
 
     @Override
@@ -390,23 +323,26 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             CurrencyAccountSnapshot requested,
             CurrencyAccountSnapshot current
     ) {
-        Optional<PhysicalContents> replacement = decodeSnapshotContents(requested);
-        if (replacement.isEmpty()) {
+        CurrencyPhysicalAccountEditor.ReplacementAttempt replacement = physical.applySnapshot(
+                player,
+                requested
+        );
+        if (replacement == CurrencyPhysicalAccountEditor.ReplacementAttempt.INVALID_PAYLOAD) {
             return CompletableFuture.completedFuture(restoreResult(
                     CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
                     Optional.of(current),
                     "stored restore snapshot cannot be decoded"
             ));
         }
-        if (!replacePhysical(player, replacement.orElseThrow())) {
-            return CompletableFuture.completedFuture(compensateRestore(
+        if (replacement == CurrencyPhysicalAccountEditor.ReplacementAttempt.MUTATION_FAILED) {
+            return CompletableFuture.completedFuture(physical.compensateRestore(
                     player,
                     current,
                     "physical restore failed before bank commit"
             ));
         }
         if (!replaceBankForRestore(current, requested)) {
-            return CompletableFuture.completedFuture(compensateRestore(
+            return CompletableFuture.completedFuture(physical.compensateRestore(
                     player,
                     current,
                     "bank revision changed during restore"
@@ -433,7 +369,7 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             CurrencyAccountSnapshot requested,
             CurrencyAccountSnapshot before
     ) {
-        Optional<CurrencyAccountSnapshot> observed = captureSafely(player);
+        Optional<CurrencyAccountSnapshot> observed = physical.captureSafely(player);
         if (observed.isEmpty()) {
             return CompletableFuture.completedFuture(restoreResult(
                     CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
@@ -454,184 +390,13 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
                 Optional.of(restored),
                 "exact before assets restored"
         );
-        return flushRestore(player, requested, restored, success);
-    }
-
-    private CompletionStage<CurrencyRestoreResult> flushRestore(
-            Player player,
-            CurrencyAccountSnapshot requested,
-            CurrencyAccountSnapshot restored,
-            CurrencyRestoreResult success
-    ) {
-        return balances.flushAsync().handle((ignored, failure) -> failure)
-                .thenCompose(failure -> finishRestoreFlush(
-                        player,
-                        requested,
-                        restored,
-                        success,
-                        failure
-                ));
-    }
-
-    private CompletionStage<CurrencyRestoreResult> finishRestoreFlush(
-            Player player,
-            CurrencyAccountSnapshot requested,
-            CurrencyAccountSnapshot restored,
-            CurrencyRestoreResult success,
-            Throwable failure
-    ) {
-        if (failure != null) {
-            plugin.getLogger().severe(
-                    "Failed to durably flush an ES-X02 currency restore: " + failure.getMessage()
-            );
-            return CompletableFuture.completedFuture(restoreResult(
-                    CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
-                    Optional.empty(),
-                    "restored bank state is local but durable flush failed"
-            ));
-        }
-        return verifier.capture(player, requested.playerId()).handle(
-                (durableState, verificationFailure) -> durableRestoreOutcome(
-                        restored,
-                        success,
-                        durableState,
-                        verificationFailure
-                )
-        );
-    }
-
-    private CurrencyRestoreResult durableRestoreOutcome(
-            CurrencyAccountSnapshot restored,
-            CurrencyRestoreResult success,
-            CurrencyAccountSnapshot durableState,
-            Throwable verificationFailure
-    ) {
-        if (verificationFailure != null) {
-            plugin.getLogger().severe(
-                    "Failed exact post-flush ES-X02 restore verification: "
-                            + verificationFailure.getMessage()
-            );
-            return restoreResult(
-                    CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
-                    Optional.empty(),
-                    "durable restore could not be reverified on the primary thread"
-            );
-        }
-        if (!durableState.equals(restored)) {
-            return restoreResult(
-                    CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
-                    Optional.of(durableState),
-                    "account state changed while the durable restore flush was completing"
-            );
-        }
-        return success;
+        return durability.flushRestore(player, requested, restored, success);
     }
 
     @Override
     public void close() {
-        verifier.close();
+        durability.close();
         locks.clear();
-    }
-
-    private Optional<PhysicalContents> decodeRemovalContents(CurrencyRemovalPlan plan) {
-        try {
-            return Optional.of(new PhysicalContents(
-                    accounts.decode(plan.replacementInventory()),
-                    accounts.decode(plan.replacementEnderChest())
-            ));
-        } catch (RuntimeException exception) {
-            return Optional.empty();
-        }
-    }
-
-    private Optional<PhysicalContents> decodeSnapshotContents(CurrencyAccountSnapshot snapshot) {
-        try {
-            return Optional.of(new PhysicalContents(
-                    accounts.decode(snapshot.inventory()),
-                    accounts.decode(snapshot.enderChest())
-            ));
-        } catch (RuntimeException exception) {
-            return Optional.empty();
-        }
-    }
-
-    private static boolean replacePhysical(Player player, PhysicalContents replacement) {
-        try {
-            player.getInventory().setContents(replacement.inventory());
-            player.getEnderChest().setContents(replacement.enderChest());
-            return true;
-        } catch (RuntimeException exception) {
-            return false;
-        }
-    }
-
-    private Optional<CurrencyAccountSnapshot> captureSafely(Player player) {
-        try {
-            return Optional.of(accounts.capture(player));
-        } catch (RuntimeException exception) {
-            plugin.getLogger().severe(
-                    "ES-X02 could not observe exact currency state: " + exception.getMessage()
-            );
-            return Optional.empty();
-        }
-    }
-
-    private CompletionStage<CurrencyRemovalResult> compensateRemoval(
-            Player player,
-            CurrencyAccountSnapshot before,
-            String failureDetail
-    ) {
-        Optional<CurrencyAccountSnapshot> observed = restorePhysicalAndObserve(player, before);
-        if (observed.isPresent() && accounts.sameAssets(observed.orElseThrow(), before)) {
-            CurrencyAccountSnapshot rolledBack = observed.orElseThrow();
-            return completedRemoval(
-                    CurrencyRemovalResult.Status.FAILED_ROLLED_BACK,
-                    0L,
-                    rolledBack.authoritativeTotal(),
-                    observed,
-                    failureDetail + "; exact physical state was restored"
-            );
-        }
-        long finalTotal = observed.map(CurrencyAccountSnapshot::authoritativeTotal)
-                .orElse(before.authoritativeTotal());
-        return completedRemoval(
-                CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
-                0L,
-                finalTotal,
-                observed,
-                failureDetail + "; exact rollback could not be verified"
-        );
-    }
-
-    private CurrencyRestoreResult compensateRestore(
-            Player player,
-            CurrencyAccountSnapshot before,
-            String failureDetail
-    ) {
-        Optional<CurrencyAccountSnapshot> observed = restorePhysicalAndObserve(player, before);
-        if (observed.isPresent() && accounts.sameAssets(observed.orElseThrow(), before)) {
-            return restoreResult(
-                    CurrencyRestoreResult.Status.FAILED_ROLLED_BACK,
-                    observed,
-                    failureDetail + "; exact physical state was restored"
-            );
-        }
-        return restoreResult(
-                CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
-                observed,
-                failureDetail + "; exact rollback could not be verified"
-        );
-    }
-
-    private Optional<CurrencyAccountSnapshot> restorePhysicalAndObserve(
-            Player player,
-            CurrencyAccountSnapshot snapshot
-    ) {
-        Optional<PhysicalContents> beforeContents = decodeSnapshotContents(snapshot);
-        if (beforeContents.isEmpty() || !replacePhysical(player, beforeContents.orElseThrow())) {
-            plugin.getLogger().severe("ES-X02 physical compensation failed.");
-        }
-        return captureSafely(player);
     }
 
     private static boolean isCommittedState(
@@ -697,8 +462,5 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
                     "currency moderation API must be called on the primary server thread"
             );
         }
-    }
-
-    private record PhysicalContents(ItemStack[] inventory, ItemStack[] enderChest) {
     }
 }
