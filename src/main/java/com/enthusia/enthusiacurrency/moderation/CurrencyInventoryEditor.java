@@ -46,7 +46,7 @@ final class CurrencyInventoryEditor {
         long items = 0L;
         long blocks = 0L;
         for (ItemStack stack : contents) {
-            if (stack == null || stack.getType() == Material.AIR) {
+            if (isEmpty(stack)) {
                 continue;
             }
             if (manager.isCurrencyItem(stack)) {
@@ -72,30 +72,53 @@ final class CurrencyInventoryEditor {
         return count(box.getInventory().getContents());
     }
 
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     private void remove(ItemStack[] contents, Remaining remaining) {
         for (int index = 0; index < contents.length; index++) {
             if (remaining.done()) {
                 return;
             }
             ItemStack stack = contents[index];
-            if (stack == null || stack.getType() == Material.AIR) {
+            if (isEmpty(stack)) {
                 continue;
             }
-            if (manager.isCurrencyItem(stack) && remaining.items > 0L) {
-                int taken = (int) Math.min(stack.getAmount(), remaining.items);
-                remaining.items -= taken;
-                decrease(contents, index, stack, taken);
+            if (removeCurrencyItem(contents, index, stack, remaining)) {
                 continue;
             }
-            if (manager.isCurrencyBlock(stack) && remaining.blocks > 0L) {
-                int taken = (int) Math.min(stack.getAmount(), remaining.blocks);
-                remaining.blocks -= taken;
-                decrease(contents, index, stack, taken);
+            if (removeCurrencyBlock(contents, index, stack, remaining)) {
                 continue;
             }
             removeNested(stack, remaining);
         }
+    }
+
+    private boolean removeCurrencyItem(
+            ItemStack[] contents,
+            int index,
+            ItemStack stack,
+            Remaining remaining
+    ) {
+        if (!manager.isCurrencyItem(stack) || remaining.items <= 0L) {
+            return false;
+        }
+        int taken = (int) Math.min(stack.getAmount(), remaining.items);
+        remaining.items -= taken;
+        decrease(contents, index, stack, taken);
+        return true;
+    }
+
+    private boolean removeCurrencyBlock(
+            ItemStack[] contents,
+            int index,
+            ItemStack stack,
+            Remaining remaining
+    ) {
+        if (!manager.isCurrencyBlock(stack) || remaining.blocks <= 0L) {
+            return false;
+        }
+        int taken = (int) Math.min(stack.getAmount(), remaining.blocks);
+        remaining.blocks -= taken;
+        decrease(contents, index, stack, taken);
+        return true;
     }
 
     private void removeNested(ItemStack stack, Remaining remaining) {
@@ -111,15 +134,17 @@ final class CurrencyInventoryEditor {
         stack.setItemMeta(meta);
     }
 
-    @SuppressWarnings("PMD.AvoidAssigningNull")
     private static void decrease(ItemStack[] contents, int index, ItemStack stack, int amount) {
         int replacement = stack.getAmount() - amount;
         if (replacement == 0) {
-            // Bukkit uses null entries to represent empty ItemStack array slots.
-            contents[index] = null;
+            contents[index] = null; // NOPMD - Bukkit represents an empty inventory-array slot with null.
         } else {
             stack.setAmount(replacement);
         }
+    }
+
+    private static boolean isEmpty(ItemStack stack) {
+        return stack == null || stack.getType() == Material.AIR;
     }
 
     private record Count(long items, long blocks) {
