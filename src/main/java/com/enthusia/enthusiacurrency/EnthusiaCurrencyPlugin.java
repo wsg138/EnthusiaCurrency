@@ -233,7 +233,6 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         }
         Bukkit.getServicesManager().unregister(CurrencyModerationApi.class, moderationService);
         moderationService.close();
-        moderationService = null;
     }
 
     private void setupVault() {
