@@ -8,6 +8,8 @@ Vault-backed token economy plugin with physical deposits, withdrawals, payments,
 mvn -B -ntp verify
 ```
 
+The standalone source is mirrored into `EnthusiaStaff` and must satisfy that aggregate repository's static-analysis policy without aggregate-only product-source edits, so component parity remains verifiable.
+
 ## EnthusiaStaff moderation API
 
 EnthusiaCurrency publishes `CurrencyModerationApi` version `1` through Bukkit's `ServicesManager`. The API has no player-facing command and does not grant moderation authority: EnthusiaStaff performs permission, case, and audit authorization before invoking it.

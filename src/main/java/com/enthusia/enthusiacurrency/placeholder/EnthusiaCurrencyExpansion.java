@@ -7,6 +7,7 @@ import org.bukkit.entity.Player;
 
 import java.util.Locale;
 
+@SuppressWarnings({"PMD.NPathComplexity", "PMD.AvoidLiteralsInIfCondition"})
 public class EnthusiaCurrencyExpansion extends PlaceholderExpansion {
 
     private final EnthusiaCurrencyPlugin plugin;

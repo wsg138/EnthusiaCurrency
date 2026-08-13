@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.UUID;
 
+@SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
 public class CurrencyService {
 
     private record CachedItemBalance(long amount, long expiresAtNanos) {

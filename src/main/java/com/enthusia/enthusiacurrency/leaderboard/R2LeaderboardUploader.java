@@ -105,8 +105,7 @@ public final class R2LeaderboardUploader {
         String path = "/" + encodePathSegment(settings.bucket()) + "/" + encodeObjectKey(key);
         URI uri = URI.create(endpointUri.getScheme() + "://" + host + path);
 
-        String canonicalHeaders = ""
-                + "cache-control:no-cache\n"
+        String canonicalHeaders = "cache-control:no-cache\n"
                 + "content-type:application/json\n"
                 + "host:" + host + "\n"
                 + "x-amz-content-sha256:" + payloadHash + "\n"

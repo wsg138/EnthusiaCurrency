@@ -25,7 +25,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
-@SuppressWarnings("PMD.DoNotUseThreads")
+@SuppressWarnings({"PMD.DoNotUseThreads", "PMD.AvoidInstantiatingObjectsInLoops"})
 public final class SkinCache {
 
     private record CachedSkin(SkinProfile profile, long version) {

@@ -59,12 +59,19 @@ public record CurrencyAccountSnapshot(
         if (!(other instanceof CurrencyAccountSnapshot that)) {
             return false;
         }
+        return sameAmounts(that) && sameIdentityAndContents(that);
+    }
+
+    private boolean sameAmounts(CurrencyAccountSnapshot that) {
         return bankBalance == that.bankBalance
                 && bankRevision == that.bankRevision
                 && inventoryValue == that.inventoryValue
                 && enderChestValue == that.enderChestValue
-                && authoritativeTotal == that.authoritativeTotal
-                && playerId.equals(that.playerId)
+                && authoritativeTotal == that.authoritativeTotal;
+    }
+
+    private boolean sameIdentityAndContents(CurrencyAccountSnapshot that) {
+        return playerId.equals(that.playerId)
                 && Arrays.equals(inventory, that.inventory)
                 && Arrays.equals(enderChest, that.enderChest)
                 && checksum.equals(that.checksum);

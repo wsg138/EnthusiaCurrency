@@ -11,6 +11,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public final class LegacyYamlBalanceMigration {
@@ -36,7 +37,9 @@ public final class LegacyYamlBalanceMigration {
                 long amount = toLong(configuration.get("balances." + key));
                 balances.put(uuid, Math.max(0L, amount));
             } catch (IllegalArgumentException ignored) {
-                logger.warning("Skipping invalid balance entry for key: " + key);
+                if (logger.isLoggable(Level.WARNING)) {
+                    logger.warning("Skipping invalid balance entry for key: " + key);
+                }
             }
         }
 

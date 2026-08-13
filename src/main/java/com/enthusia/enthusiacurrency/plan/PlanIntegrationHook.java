@@ -31,7 +31,7 @@ public final class PlanIntegrationHook {
             CapabilityService capabilities = CapabilityService.getInstance();
             return capabilities.hasCapability("DATA_EXTENSION_VALUES")
                     && capabilities.hasCapability("DATA_EXTENSION_TABLES");
-        } catch (Throwable ex) {
+        } catch (RuntimeException | LinkageError ex) {
             return false;
         }
     }
@@ -44,7 +44,7 @@ public final class PlanIntegrationHook {
             plugin.getLogger().fine("Plan is not ready for EnthusiaCurrency analytics registration.");
         } catch (IllegalArgumentException ex) {
             plugin.getLogger().warning("Plan rejected the EnthusiaCurrency analytics extension: " + ex.getMessage());
-        } catch (Throwable ex) {
+        } catch (RuntimeException | LinkageError ex) {
             plugin.getLogger().warning("Failed to register EnthusiaCurrency Plan analytics extension: " + ex.getMessage());
         }
     }

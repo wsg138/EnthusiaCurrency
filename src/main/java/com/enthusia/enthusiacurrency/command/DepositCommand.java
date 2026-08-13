@@ -16,6 +16,9 @@ import java.util.OptionalLong;
 
 public class DepositCommand implements CommandExecutor, TabCompleter {
 
+    private static final int SINGLE_ARGUMENT = 1;
+    private static final String ALL_ARGUMENT = "all";
+
     private final EnthusiaCurrencyPlugin plugin;
 
     public DepositCommand(EnthusiaCurrencyPlugin plugin) {
@@ -31,7 +34,7 @@ public class DepositCommand implements CommandExecutor, TabCompleter {
 
         CurrencyService currencyService = plugin.getCurrencyService();
 
-        if (args.length == 0 || args[0].equalsIgnoreCase("all")) {
+        if (args.length == 0 || args[0].equalsIgnoreCase(ALL_ARGUMENT)) {
             CurrencyService.DepositResult result = currencyService.depositAll(player);
             if (!result.success()) {
                 String message = plugin.msgNoPrefix("not-enough-items")
@@ -74,8 +77,8 @@ public class DepositCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1 && "all".startsWith(args[0].toLowerCase(Locale.ROOT))) {
-            return Collections.singletonList("all");
+        if (args.length == SINGLE_ARGUMENT && ALL_ARGUMENT.startsWith(args[0].toLowerCase(Locale.ROOT))) {
+            return Collections.singletonList(ALL_ARGUMENT);
         }
         return Collections.emptyList();
     }
