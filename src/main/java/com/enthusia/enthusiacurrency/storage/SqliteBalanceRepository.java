@@ -6,10 +6,10 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
-import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class SqliteBalanceRepository implements BalanceRepository {
 
@@ -38,20 +38,15 @@ public class SqliteBalanceRepository implements BalanceRepository {
             statement.execute("PRAGMA synchronous=NORMAL");
             statement.execute("PRAGMA busy_timeout=5000");
             statement.execute(CREATE_TABLE_SQL);
-            addColumnIfMissing(
-                    statement,
-                    "ALTER TABLE balances ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
-            );
-            addColumnIfMissing(
-                    statement,
-                    "ALTER TABLE balances ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0"
-            );
+            addRevisionColumnIfMissing(statement);
+            addUpdatedAtColumnIfMissing(statement);
         }
     }
 
     @Override
+    @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
     public Map<UUID, StoredBalance> loadAllBalances() throws Exception {
-        Map<UUID, StoredBalance> balances = new HashMap<>();
+        Map<UUID, StoredBalance> balances = new ConcurrentHashMap<>();
         try (Connection connection = openConnection();
              Statement statement = connection.createStatement();
              ResultSet resultSet = statement.executeQuery(
@@ -108,14 +103,30 @@ public class SqliteBalanceRepository implements BalanceRepository {
         return DriverManager.getConnection(jdbcUrl);
     }
 
-    private static void addColumnIfMissing(Statement statement, String sql) throws Exception {
+    private static void addRevisionColumnIfMissing(Statement statement) throws Exception {
         try {
-            statement.execute(sql);
+            statement.execute(
+                    "ALTER TABLE balances ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+            );
         } catch (Exception exception) {
-            String message = exception.getMessage();
-            if (message == null || !message.toLowerCase(Locale.ROOT).contains("duplicate column")) {
-                throw exception;
-            }
+            rethrowUnlessDuplicateColumn(exception);
+        }
+    }
+
+    private static void addUpdatedAtColumnIfMissing(Statement statement) throws Exception {
+        try {
+            statement.execute(
+                    "ALTER TABLE balances ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0"
+            );
+        } catch (Exception exception) {
+            rethrowUnlessDuplicateColumn(exception);
+        }
+    }
+
+    private static void rethrowUnlessDuplicateColumn(Exception exception) throws Exception {
+        String message = exception.getMessage();
+        if (message == null || !message.toLowerCase(Locale.ROOT).contains("duplicate column")) {
+            throw exception;
         }
     }
 
