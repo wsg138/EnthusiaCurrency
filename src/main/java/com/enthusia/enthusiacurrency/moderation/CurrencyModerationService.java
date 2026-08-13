@@ -134,34 +134,34 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             CurrencyAccountSnapshot current,
             CurrencyRemovalPlan plan
     ) {
-        if (isCommittedState(current, plan)) {
-            return Optional.of(removalResult(
-                    CurrencyRemovalResult.Status.COMMITTED,
-                    plan.amount(),
-                    current.authoritativeTotal(),
-                    Optional.of(current),
-                    "operation was already committed"
-            ));
-        }
-        if (!current.checksum().equals(plan.before().checksum())) {
-            return Optional.of(removalResult(
-                    CurrencyRemovalResult.Status.STALE,
-                    0L,
-                    current.authoritativeTotal(),
-                    Optional.of(current),
-                    "account state changed after planning"
-            ));
-        }
-        if (!planner.validPlan(plan)) {
-            return Optional.of(removalResult(
+        return switch (CurrencyModerationStateEvaluator.removal(
+                current,
+                plan,
+                planner.validPlan(plan)
+        )) {
+            case INVALID_PLAN -> Optional.of(removalResult(
                     CurrencyRemovalResult.Status.INVALID_PLAN,
                     0L,
                     current.authoritativeTotal(),
                     Optional.of(current),
                     "plan does not match a fresh provider calculation"
             ));
-        }
-        return Optional.empty();
+            case COMMITTED -> Optional.of(removalResult(
+                    CurrencyRemovalResult.Status.COMMITTED,
+                    plan.amount(),
+                    current.authoritativeTotal(),
+                    Optional.of(current),
+                    "operation was already committed"
+            ));
+            case STALE -> Optional.of(removalResult(
+                    CurrencyRemovalResult.Status.STALE,
+                    0L,
+                    current.authoritativeTotal(),
+                    Optional.of(current),
+                    "account state changed after planning"
+            ));
+            case APPLY -> Optional.empty();
+        };
     }
 
     private CompletionStage<CurrencyRemovalResult> applyFreshRemoval(
@@ -228,7 +228,7 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             );
         }
         CurrencyAccountSnapshot after = observed.orElseThrow();
-        if (!isCommittedState(after, plan)) {
+        if (!CurrencyModerationStateEvaluator.isCommitted(after, plan)) {
             return completedRemoval(
                     CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
                     plan.amount(),
@@ -301,21 +301,24 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             String expectedCurrentChecksum
     ) {
         CurrencyAccountSnapshot current = accounts.capture(player);
-        if (accounts.sameAssets(current, requested)) {
-            return CompletableFuture.completedFuture(restoreResult(
+        return switch (CurrencyModerationStateEvaluator.restore(
+                current,
+                requested,
+                expectedCurrentChecksum,
+                accounts.sameAssets(current, requested)
+        )) {
+            case RESTORED -> CompletableFuture.completedFuture(restoreResult(
                     CurrencyRestoreResult.Status.RESTORED,
                     Optional.of(current),
                     "requested assets were already restored"
             ));
-        }
-        if (!current.checksum().equals(expectedCurrentChecksum)) {
-            return CompletableFuture.completedFuture(restoreResult(
+            case STALE -> CompletableFuture.completedFuture(restoreResult(
                     CurrencyRestoreResult.Status.STALE,
                     Optional.of(current),
                     "account state changed after the removal result being restored"
             ));
-        }
-        return applyFreshRestore(player, requested, current);
+            case APPLY -> applyFreshRestore(player, requested, current);
+        };
     }
 
     private CompletionStage<CurrencyRestoreResult> applyFreshRestore(
@@ -397,14 +400,6 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
     public void close() {
         durability.close();
         locks.clear();
-    }
-
-    private static boolean isCommittedState(
-            CurrencyAccountSnapshot current,
-            CurrencyRemovalPlan plan
-    ) {
-        return current.checksum().equals(plan.replacementChecksum())
-                && current.authoritativeTotal() == plan.expectedFinalTotal();
     }
 
     private boolean isVerifiedRestore(
