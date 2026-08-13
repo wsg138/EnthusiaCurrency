@@ -55,51 +55,25 @@ jobs:
               for rule in rules:
                   if rule not in values:
                       values.append(rule)
-              if len(values) == 1:
-                  annotation = f'@SuppressWarnings("{values[0]}")'
-              else:
-                  annotation = '@SuppressWarnings({' + ', '.join(f'"{value}"' for value in values) + '})'
+              annotation = (
+                  f'@SuppressWarnings("{values[0]}")'
+                  if len(values) == 1
+                  else '@SuppressWarnings({' + ', '.join(f'"{value}"' for value in values) + '})'
+              )
               replacement = annotation + '\n' + match.group('decl')
               write(path, text[:match.start()] + replacement + text[match.end():])
 
-          # Result construction is intrinsic to these bounded load/refresh loops; keep the waiver local to each legacy class.
-          add_class_suppression(
-              'src/main/java/com/enthusia/enthusiacurrency/analytics/CurrencyAnalyticsStorage.java',
-              'CurrencyAnalyticsStorage',
-              ['PMD.AvoidInstantiatingObjectsInLoops'],
-          )
-          add_class_suppression(
-              'src/main/java/com/enthusia/enthusiacurrency/baltop/BaltopTracker.java',
-              'BaltopTracker',
-              ['PMD.AvoidInstantiatingObjectsInLoops'],
-          )
-          add_class_suppression(
-              'src/main/java/com/enthusia/enthusiacurrency/service/CurrencyService.java',
-              'CurrencyService',
-              ['PMD.AvoidInstantiatingObjectsInLoops'],
-          )
-          add_class_suppression(
-              'src/main/java/com/enthusia/enthusiacurrency/skin/SkinCache.java',
-              'SkinCache',
-              ['PMD.AvoidInstantiatingObjectsInLoops'],
-          )
-          add_class_suppression(
-              'src/main/java/com/enthusia/enthusiacurrency/skin/SqliteSkinProfileRepository.java',
-              'SqliteSkinProfileRepository',
-              ['PMD.AvoidInstantiatingObjectsInLoops'],
-          )
-          add_class_suppression(
-              'src/main/java/com/enthusia/enthusiacurrency/storage/PlayerProfileStorage.java',
-              'PlayerProfileStorage',
-              ['PMD.AvoidInstantiatingObjectsInLoops'],
-          )
-          add_class_suppression(
-              'src/main/java/com/enthusia/enthusiacurrency/storage/SqlitePlayerProfileRepository.java',
-              'SqlitePlayerProfileRepository',
-              ['PMD.AvoidInstantiatingObjectsInLoops'],
-          )
+          for path, class_name in [
+              ('src/main/java/com/enthusia/enthusiacurrency/analytics/CurrencyAnalyticsStorage.java', 'CurrencyAnalyticsStorage'),
+              ('src/main/java/com/enthusia/enthusiacurrency/baltop/BaltopTracker.java', 'BaltopTracker'),
+              ('src/main/java/com/enthusia/enthusiacurrency/service/CurrencyService.java', 'CurrencyService'),
+              ('src/main/java/com/enthusia/enthusiacurrency/skin/SkinCache.java', 'SkinCache'),
+              ('src/main/java/com/enthusia/enthusiacurrency/skin/SqliteSkinProfileRepository.java', 'SqliteSkinProfileRepository'),
+              ('src/main/java/com/enthusia/enthusiacurrency/storage/PlayerProfileStorage.java', 'PlayerProfileStorage'),
+              ('src/main/java/com/enthusia/enthusiacurrency/storage/SqlitePlayerProfileRepository.java', 'SqlitePlayerProfileRepository'),
+          ]:
+              add_class_suppression(path, class_name, ['PMD.AvoidInstantiatingObjectsInLoops'])
 
-          # These legacy dispatch/traversal methods are intentionally branch-heavy; suppress only NPath/literal rules on their classes.
           add_class_suppression(
               'src/main/java/com/enthusia/enthusiacurrency/listener/BaltopGuiListener.java',
               'BaltopGuiListener',
@@ -116,29 +90,15 @@ jobs:
               ['PMD.NPathComplexity'],
           )
 
-          # Simplify exact snapshot equality instead of suppressing complexity in new ES-X02 API code.
           snapshot = 'src/main/java/com/enthusia/enthusiacurrency/api/moderation/CurrencyAccountSnapshot.java'
-          old_equals = '''    @Override
-              public boolean equals(Object other) {
-                  if (this == other) {
-                      return true;
-                  }
-                  if (!(other instanceof CurrencyAccountSnapshot that)) {
-                      return false;
-                  }
-                  return bankBalance == that.bankBalance
-                          && bankRevision == that.bankRevision
-                          && inventoryValue == that.inventoryValue
-                          && enderChestValue == that.enderChestValue
-                          && authoritativeTotal == that.authoritativeTotal
-                          && playerId.equals(that.playerId)
-                          && Arrays.equals(inventory, that.inventory)
-                          && Arrays.equals(enderChest, that.enderChest)
-                          && checksum.equals(that.checksum);
-              }
-          '''
-          # Here-doc indentation is stripped deliberately to match source indentation.
-          old_equals = old_equals.replace('              ', '')
+          text = read(snapshot)
+          equals_pattern = re.compile(
+              r'    @Override\n'
+              r'    public boolean equals\(Object other\) \{.*?\n'
+              r'    \}\n\n'
+              r'(?=    @Override\n    public int hashCode\(\))',
+              re.DOTALL,
+          )
           new_equals = '''    @Override
           public boolean equals(Object other) {
               if (this == other) {
@@ -164,10 +124,13 @@ jobs:
                       && Arrays.equals(enderChest, that.enderChest)
                       && checksum.equals(that.checksum);
           }
-          '''
-          replace_exact(snapshot, old_equals, new_equals)
 
-          # Replace numeric condition literals with named protocol/command constants.
+          '''
+          updated, count = equals_pattern.subn(new_equals, text, count=1)
+          if count != 1:
+              raise SystemExit(f'{snapshot}: equals method pattern matched {count} times')
+          write(snapshot, updated)
+
           deposit = 'src/main/java/com/enthusia/enthusiacurrency/command/DepositCommand.java'
           replace_exact(
               deposit,
@@ -185,23 +148,25 @@ jobs:
           replace_exact(withdraw, 'args.length != 1', 'args.length != SINGLE_ARGUMENT')
 
           config = 'src/main/java/com/enthusia/enthusiacurrency/config/ConfigMigrator.java'
+          replace_exact(config, 'config.getInt("config-version", 1)', 'config.getInt(CONFIG_VERSION_KEY, 1)')
+          replace_exact(config, 'config.isSet("config-version")', 'config.isSet(CONFIG_VERSION_KEY)')
+          replace_exact(config, 'config.set("config-version", CURRENT_CONFIG_VERSION)', 'config.set(CONFIG_VERSION_KEY, CURRENT_CONFIG_VERSION)')
+          replace_exact(config, 'addedKeys.add("config-version")', 'addedKeys.add(CONFIG_VERSION_KEY)')
           replace_exact(
               config,
               '    public static final int CURRENT_CONFIG_VERSION = 4;\n\n',
               '    public static final int CURRENT_CONFIG_VERSION = 4;\n    private static final String CONFIG_VERSION_KEY = "config-version";\n\n',
           )
-          replace_exact(config, '"config-version"', 'CONFIG_VERSION_KEY', expected=4)
 
           plan = 'src/main/java/com/enthusia/enthusiacurrency/plan/EnthusiaCurrencyPlanExtension.java'
+          replace_exact(plan, '@Tab("Server")', '@Tab(SERVER_TAB)', expected=8)
+          replace_exact(plan, 'storedAccounts <= 0L', 'storedAccounts <= NO_ACCOUNTS')
           replace_exact(
               plan,
               '    private static final Duration MONTH = Duration.ofDays(30);\n\n',
               '    private static final Duration MONTH = Duration.ofDays(30);\n    private static final String SERVER_TAB = "Server";\n    private static final long NO_ACCOUNTS = 0L;\n\n',
           )
-          replace_exact(plan, '@Tab("Server")', '@Tab(SERVER_TAB)', expected=8)
-          replace_exact(plan, 'storedAccounts <= 0L', 'storedAccounts <= NO_ACCOUNTS')
 
-          # Avoid empty-string concatenation in the AWS canonical-header construction.
           r2 = 'src/main/java/com/enthusia/enthusiacurrency/leaderboard/R2LeaderboardUploader.java'
           replace_exact(
               r2,
@@ -209,11 +174,9 @@ jobs:
               '        String canonicalHeaders = "cache-control:no-cache\\n"\n',
           )
 
-          # Preserve soft-dependency fail-closed behavior without swallowing VM/thread-death errors.
           hook = 'src/main/java/com/enthusia/enthusiacurrency/plan/PlanIntegrationHook.java'
           replace_exact(hook, 'catch (Throwable ex)', 'catch (RuntimeException | LinkageError ex)', expected=2)
 
-          # Guard the only loop-time warning that constructs a message for an invalid legacy row.
           legacy = 'src/main/java/com/enthusia/enthusiacurrency/storage/LegacyYamlBalanceMigration.java'
           replace_exact(
               legacy,
