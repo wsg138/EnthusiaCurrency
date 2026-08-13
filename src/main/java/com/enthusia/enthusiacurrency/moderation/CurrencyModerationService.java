@@ -196,8 +196,11 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             player.getInventory().setContents(replacementInventory);
             player.getEnderChest().setContents(replacementEnder);
         } catch (RuntimeException exception) {
-            restorePhysical(player, current);
-            return completedRemoval(CurrencyRemovalResult.Status.FAILED_ROLLED_BACK, 0L, current.authoritativeTotal(), Optional.of(capture(player)), "physical mutation failed before bank commit");
+            return compensateRemoval(
+                    player,
+                    current,
+                    "physical mutation failed before bank commit"
+            );
         }
 
         boolean bankChanged = plan.replacementBankBalance() != current.bankBalance();
@@ -208,9 +211,11 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
                 plan.replacementBankBalance(),
                 false
         )) {
-            restorePhysical(player, current);
-            CurrencyAccountSnapshot rolledBack = capture(player);
-            return completedRemoval(CurrencyRemovalResult.Status.FAILED_ROLLED_BACK, 0L, rolledBack.authoritativeTotal(), Optional.of(rolledBack), "bank revision changed during apply; physical state was restored");
+            return compensateRemoval(
+                    player,
+                    current,
+                    "bank revision changed during apply"
+            );
         }
 
         CurrencyAccountSnapshot after;
@@ -307,10 +312,9 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
             player.getInventory().setContents(requestedInventory);
             player.getEnderChest().setContents(requestedEnder);
         } catch (RuntimeException exception) {
-            restorePhysical(player, current);
-            return CompletableFuture.completedFuture(new CurrencyRestoreResult(
-                    CurrencyRestoreResult.Status.FAILED_ROLLED_BACK,
-                    Optional.of(capture(player)),
+            return CompletableFuture.completedFuture(compensateRestore(
+                    player,
+                    current,
                     "physical restore failed before bank commit"
             ));
         }
@@ -322,11 +326,10 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
                 requested.bankBalance(),
                 true
         )) {
-            restorePhysical(player, current);
-            return CompletableFuture.completedFuture(new CurrencyRestoreResult(
-                    CurrencyRestoreResult.Status.FAILED_ROLLED_BACK,
-                    Optional.of(capture(player)),
-                    "bank revision changed during restore; physical state was rolled back"
+            return CompletableFuture.completedFuture(compensateRestore(
+                    player,
+                    current,
+                    "bank revision changed during restore"
             ));
         }
 
@@ -489,12 +492,72 @@ public final class CurrencyModerationService implements CurrencyModerationApi, A
         digest.update(value);
     }
 
-    private static void restorePhysical(Player player, CurrencyAccountSnapshot snapshot) {
+    private CompletionStage<CurrencyRemovalResult> compensateRemoval(
+            Player player,
+            CurrencyAccountSnapshot before,
+            String failureDetail
+    ) {
+        Optional<CurrencyAccountSnapshot> observed = restorePhysicalAndObserve(player, before);
+        if (observed.isPresent() && sameAssets(observed.orElseThrow(), before)) {
+            CurrencyAccountSnapshot rolledBack = observed.orElseThrow();
+            return completedRemoval(
+                    CurrencyRemovalResult.Status.FAILED_ROLLED_BACK,
+                    0L,
+                    rolledBack.authoritativeTotal(),
+                    observed,
+                    failureDetail + "; exact physical state was restored"
+            );
+        }
+        long finalTotal = observed.map(CurrencyAccountSnapshot::authoritativeTotal)
+                .orElse(before.authoritativeTotal());
+        return completedRemoval(
+                CurrencyRemovalResult.Status.QUARANTINE_REQUIRED,
+                0L,
+                finalTotal,
+                observed,
+                failureDetail + "; exact rollback could not be verified"
+        );
+    }
+
+    private CurrencyRestoreResult compensateRestore(
+            Player player,
+            CurrencyAccountSnapshot before,
+            String failureDetail
+    ) {
+        Optional<CurrencyAccountSnapshot> observed = restorePhysicalAndObserve(player, before);
+        if (observed.isPresent() && sameAssets(observed.orElseThrow(), before)) {
+            return new CurrencyRestoreResult(
+                    CurrencyRestoreResult.Status.FAILED_ROLLED_BACK,
+                    observed,
+                    failureDetail + "; exact physical state was restored"
+            );
+        }
+        return new CurrencyRestoreResult(
+                CurrencyRestoreResult.Status.QUARANTINE_REQUIRED,
+                observed,
+                failureDetail + "; exact rollback could not be verified"
+        );
+    }
+
+    private Optional<CurrencyAccountSnapshot> restorePhysicalAndObserve(
+            Player player,
+            CurrencyAccountSnapshot snapshot
+    ) {
         try {
             player.getInventory().setContents(decode(snapshot.inventory()));
             player.getEnderChest().setContents(decode(snapshot.enderChest()));
-        } catch (RuntimeException ignored) {
-            // The caller returns quarantine/rollback status; overwriting a second failure would lose evidence.
+        } catch (RuntimeException exception) {
+            plugin.getLogger().severe(
+                    "ES-X02 physical compensation failed: " + exception.getMessage()
+            );
+        }
+        try {
+            return Optional.of(capture(player));
+        } catch (RuntimeException exception) {
+            plugin.getLogger().severe(
+                    "ES-X02 could not observe state after compensation: " + exception.getMessage()
+            );
+            return Optional.empty();
         }
     }
 
