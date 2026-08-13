@@ -49,6 +49,7 @@ public class BalanceStorage {
         this.writerExecutor = Executors.newSingleThreadExecutor(new BalanceWriterThreadFactory());
     }
 
+    @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
     public void load() {
         try {
             Files.createDirectories(plugin.getDataFolder().toPath());
@@ -143,6 +144,7 @@ public class BalanceStorage {
         return updated.amount();
     }
 
+    @SuppressWarnings("PMD.CyclomaticComplexity")
     public boolean replaceIfCurrent(
             UUID uuid,
             long expectedAmount,
@@ -329,6 +331,7 @@ public class BalanceStorage {
         }
     }
 
+    @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
     private Map<UUID, BalanceRepository.StoredBalance> balanceValues(
             Map<UUID, CachedBalance> snapshot
     ) {
