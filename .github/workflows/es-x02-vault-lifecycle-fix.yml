@@ -23,46 +23,30 @@ jobs:
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import re
-
           path = Path('src/main/java/com/enthusia/enthusiacurrency/EnthusiaCurrencyPlugin.java')
           text = path.read_text(encoding='utf-8')
-
-          old_call = '''        startRuntimeServices();
-        setupVault();
-        registerCommands();'''
-          new_call = '''        startRuntimeServices();
-        if (!setupVault()) {
-            return;
-        }
-        registerCommands();'''
+          old_call = "        startRuntimeServices();\n        setupVault();\n        registerCommands();"
+          new_call = "        startRuntimeServices();\n        if (!setupVault()) {\n            return;\n        }\n        registerCommands();"
           if text.count(old_call) != 1:
               raise SystemExit(f'onEnable Vault call match count={text.count(old_call)}')
           text = text.replace(old_call, new_call, 1)
-
-          pattern = re.compile(
-              r'    private void setupVault\(\) \{\n.*?\n    \}'
-              r'(?=\n\n    private void setupPlaceholderAPI)',
-              re.DOTALL,
-          )
-          match = pattern.search(text)
-          if match is None:
-              raise SystemExit('setupVault method not found')
-          method = match.group(0)
-          method = method.replace('private void setupVault()', 'private boolean setupVault()', 1)
-          missing = '''            Bukkit.getPluginManager().disablePlugin(this);
-            return;'''
+          start_marker = "    private void setupVault() {"
+          end_marker = "\n\n    private void setupPlaceholderAPI()"
+          if text.count(start_marker) != 1:
+              raise SystemExit(f'setupVault header match count={text.count(start_marker)}')
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          method = text[start:end]
+          method = method.replace(start_marker, "    private boolean setupVault() {", 1)
+          missing = "            Bukkit.getPluginManager().disablePlugin(this);\n            return;"
           if method.count(missing) != 1:
               raise SystemExit(f'Vault missing branch match count={method.count(missing)}')
-          method = method.replace(
-              missing,
-              '''            Bukkit.getPluginManager().disablePlugin(this);
-            return false;''',
-              1,
-          )
-          prefix, suffix = method.rsplit('\n    }', 1)
-          method = prefix + '\n        return true;\n    }' + suffix
-          text = text[:match.start()] + method + text[match.end():]
+          method = method.replace(missing, "            Bukkit.getPluginManager().disablePlugin(this);\n            return false;", 1)
+          close = method.rfind("\n    }")
+          if close < 0:
+              raise SystemExit('setupVault closing brace not found')
+          method = method[:close] + "\n        return true;" + method[close:]
+          text = text[:start] + method + text[end:]
           path.write_text(text, encoding='utf-8')
           PY
           rm .github/workflows/es-x02-vault-lifecycle-fix.yml
