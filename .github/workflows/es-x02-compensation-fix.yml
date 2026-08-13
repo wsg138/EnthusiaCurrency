@@ -1,0 +1,35 @@
+name: ES-X02 compensation fix
+
+on:
+  push:
+    branches:
+      - package/es-x02-currency-provider
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: package/es-x02-currency-provider
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply verified compensation fix
+        run: python tools/es_x02_compensation_fix.py
+      - name: Remove one-shot bootstrap files
+        run: |
+          rm tools/es_x02_compensation_fix.py
+          rm .github/workflows/es-x02-compensation-fix.yml
+      - name: Commit corrected package changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: quarantine unverifiable currency compensation"
+          git push origin HEAD:package/es-x02-currency-provider
