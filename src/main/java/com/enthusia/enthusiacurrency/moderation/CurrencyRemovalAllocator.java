@@ -3,19 +3,23 @@ package com.enthusia.enthusiacurrency.moderation;
 /** Exact-denomination allocator shared by planning and tests. */
 final class CurrencyRemovalAllocator {
 
+    private static final long ZERO_COUNT = 0L;
+    private static final int ZERO_BLOCK_VALUE = 0;
+
     private CurrencyRemovalAllocator() {
     }
 
     static Allocation maximum(long items, long blocks, int blockValue, long limit) {
-        if (items < 0L || blocks < 0L || blockValue < 0 || limit < 0L) {
+        if (items < ZERO_COUNT || blocks < ZERO_COUNT
+                || blockValue < ZERO_BLOCK_VALUE || limit < ZERO_COUNT) {
             throw new IllegalArgumentException("currency counts and limit cannot be negative");
         }
-        if (limit == 0L) {
-            return new Allocation(0L, 0L, 0L);
+        if (limit == ZERO_COUNT) {
+            return new Allocation(ZERO_COUNT, ZERO_COUNT, ZERO_COUNT);
         }
-        if (blockValue <= 0) {
+        if (blockValue <= ZERO_BLOCK_VALUE) {
             long takenItems = Math.min(items, limit);
-            return new Allocation(takenItems, 0L, takenItems);
+            return new Allocation(takenItems, ZERO_COUNT, takenItems);
         }
         long takenBlocks = Math.min(blocks, limit / blockValue);
         long blockAmount = Math.multiplyExact(takenBlocks, blockValue);
