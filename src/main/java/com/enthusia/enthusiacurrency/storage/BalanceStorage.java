@@ -144,7 +144,6 @@ public class BalanceStorage {
         return updated.amount();
     }
 
-    @SuppressWarnings("PMD.CyclomaticComplexity")
     public boolean replaceIfCurrent(
             UUID uuid,
             long expectedAmount,
@@ -152,29 +151,71 @@ public class BalanceStorage {
             long replacementAmount,
             boolean forceRevisionBump
     ) {
+        validateCasValues(expectedAmount, expectedRevision, replacementAmount);
+        CasOutcome outcome = new CasOutcome();
+        balances.compute(
+                uuid,
+                (ignored, current) -> replaceCachedBalance(
+                        current,
+                        expectedAmount,
+                        expectedRevision,
+                        replacementAmount,
+                        forceRevisionBump,
+                        outcome
+                )
+        );
+        if (outcome.changed) {
+            markDirty(uuid);
+        }
+        return outcome.success;
+    }
+
+    private static void validateCasValues(
+            long expectedAmount,
+            long expectedRevision,
+            long replacementAmount
+    ) {
         if (expectedAmount < 0L || expectedRevision < 0L || replacementAmount < 0L) {
             throw new IllegalArgumentException("balance CAS values cannot be negative");
         }
-        boolean[] success = {false};
-        boolean[] changed = {false};
-        balances.compute(uuid, (ignored, current) -> {
-            CachedBalance base = current == null
-                    ? new CachedBalance(startingBalance, 0L)
-                    : current;
-            if (base.amount() != expectedAmount || base.version() != expectedRevision) {
-                return base;
-            }
-            success[0] = true;
-            if (base.amount() == replacementAmount && !forceRevisionBump) {
-                return base;
-            }
-            changed[0] = true;
-            return new CachedBalance(replacementAmount, Math.addExact(base.version(), 1L));
-        });
-        if (changed[0]) {
-            markDirty(uuid);
+    }
+
+    private CachedBalance replaceCachedBalance(
+            CachedBalance current,
+            long expectedAmount,
+            long expectedRevision,
+            long replacementAmount,
+            boolean forceRevisionBump,
+            CasOutcome outcome
+    ) {
+        CachedBalance base = current == null
+                ? new CachedBalance(startingBalance, 0L)
+                : current;
+        if (!matchesExpected(base, expectedAmount, expectedRevision)) {
+            return base;
         }
-        return success[0];
+        outcome.success = true;
+        if (!requiresReplacement(base, replacementAmount, forceRevisionBump)) {
+            return base;
+        }
+        outcome.changed = true;
+        return new CachedBalance(replacementAmount, Math.addExact(base.version(), 1L));
+    }
+
+    private static boolean matchesExpected(
+            CachedBalance balance,
+            long expectedAmount,
+            long expectedRevision
+    ) {
+        return balance.amount() == expectedAmount && balance.version() == expectedRevision;
+    }
+
+    private static boolean requiresReplacement(
+            CachedBalance balance,
+            long replacementAmount,
+            boolean forceRevisionBump
+    ) {
+        return forceRevisionBump || balance.amount() != replacementAmount;
     }
 
     public long deposit(UUID uuid, long amount) {
@@ -428,6 +469,11 @@ public class BalanceStorage {
             return Long.MIN_VALUE;
         }
         return current + delta;
+    }
+
+    private static final class CasOutcome {
+        private boolean success;
+        private boolean changed;
     }
 
     private static final class BalanceWriterThreadFactory implements ThreadFactory {
