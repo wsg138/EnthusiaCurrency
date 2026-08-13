@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+@SuppressWarnings({"PMD.NPathComplexity", "PMD.AvoidLiteralsInIfCondition"})
 public class BaltopGuiListener implements Listener {
 
     private final EnthusiaCurrencyPlugin plugin;

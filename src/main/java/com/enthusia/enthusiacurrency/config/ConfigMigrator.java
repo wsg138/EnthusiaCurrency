@@ -19,6 +19,7 @@ import java.util.List;
 public final class ConfigMigrator {
 
     public static final int CURRENT_CONFIG_VERSION = 4;
+    private static final String CONFIG_VERSION_KEY = "config-version";
 
     private static final DateTimeFormatter BACKUP_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
@@ -41,7 +42,7 @@ public final class ConfigMigrator {
             YamlConfiguration defaults = YamlConfiguration.loadConfiguration(
                     new InputStreamReader(defaultStream, StandardCharsets.UTF_8));
             FileConfiguration config = plugin.getConfig();
-            int userVersion = config.getInt("config-version", 1);
+            int userVersion = config.getInt(CONFIG_VERSION_KEY, 1);
             boolean oldConfig = userVersion < CURRENT_CONFIG_VERSION;
             List<String> addedKeys = new ArrayList<>();
             List<String> removedKeys = new ArrayList<>();
@@ -52,10 +53,10 @@ public final class ConfigMigrator {
 
             boolean changed = addMissingKeys(config, defaults, "", addedKeys);
             changed |= removeDeprecatedKeys(config, removedKeys);
-            if (!config.isSet("config-version") || userVersion != CURRENT_CONFIG_VERSION) {
-                config.set("config-version", CURRENT_CONFIG_VERSION);
+            if (!config.isSet(CONFIG_VERSION_KEY) || userVersion != CURRENT_CONFIG_VERSION) {
+                config.set(CONFIG_VERSION_KEY, CURRENT_CONFIG_VERSION);
                 changed = true;
-                addedKeys.add("config-version");
+                addedKeys.add(CONFIG_VERSION_KEY);
             }
 
             if (changed) {

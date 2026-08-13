@@ -24,6 +24,8 @@ import java.util.Locale;
 public final class EnthusiaCurrencyPlanExtension implements DataExtension {
 
     private static final Duration MONTH = Duration.ofDays(30);
+    private static final String SERVER_TAB = "Server";
+    private static final long NO_ACCOUNTS = 0L;
 
     private final EnthusiaCurrencyPlugin plugin;
     private final DecimalFormat decimalFormat = new DecimalFormat("#,##0.00", DecimalFormatSymbols.getInstance(Locale.US));
@@ -41,13 +43,13 @@ public final class EnthusiaCurrencyPlanExtension implements DataExtension {
     }
 
     @NumberProvider(text = "Stored Accounts", iconName = "users", iconColor = Color.BLUE, priority = 100)
-    @Tab("Server")
+    @Tab(SERVER_TAB)
     public long storedAccounts() {
         return plugin.getBalanceStorage().getAllBalancesSnapshot().size();
     }
 
     @NumberProvider(text = "Total Bank Currency", iconName = "vault", iconColor = Color.AMBER, priority = 99)
-    @Tab("Server")
+    @Tab(SERVER_TAB)
     public long totalBankCurrency() {
         return plugin.getBalanceStorage().getAllBalancesSnapshot().values().stream()
                 .mapToLong(Long::longValue)
@@ -55,10 +57,10 @@ public final class EnthusiaCurrencyPlanExtension implements DataExtension {
     }
 
     @StringProvider(text = "Average Bank Balance", iconName = "chart-column", iconColor = Color.BLUE, priority = 98)
-    @Tab("Server")
+    @Tab(SERVER_TAB)
     public String averageBankBalance() {
         long storedAccounts = plugin.getBalanceStorage().getAllBalancesSnapshot().size();
-        if (storedAccounts <= 0L) {
+        if (storedAccounts <= NO_ACCOUNTS) {
             return "0.00 " + plugin.getCurrencyPlural();
         }
 
@@ -77,31 +79,31 @@ public final class EnthusiaCurrencyPlanExtension implements DataExtension {
             iconColor = Color.LIGHT_BLUE,
             priority = 97
     )
-    @Tab("Server")
+    @Tab(SERVER_TAB)
     public long serverLastCurrencyActivity() {
         return plugin.getCurrencyAnalyticsStorage().getServerTotals().lastActivityAt();
     }
 
     @NumberProvider(text = "Deposited Total", iconName = "circle-plus", iconColor = Color.GREEN, priority = 96)
-    @Tab("Server")
+    @Tab(SERVER_TAB)
     public long serverDepositedTotal() {
         return plugin.getCurrencyAnalyticsStorage().getServerTotals().deposited();
     }
 
     @NumberProvider(text = "Deposited 30d", iconName = "circle-plus", iconColor = Color.GREEN, priority = 95)
-    @Tab("Server")
+    @Tab(SERVER_TAB)
     public long serverDeposited30d() {
         return serverSummary(MONTH).deposited();
     }
 
     @NumberProvider(text = "Withdrawn Total", iconName = "circle-minus", iconColor = Color.ORANGE, priority = 94)
-    @Tab("Server")
+    @Tab(SERVER_TAB)
     public long serverWithdrawnTotal() {
         return plugin.getCurrencyAnalyticsStorage().getServerTotals().withdrawn();
     }
 
     @NumberProvider(text = "Withdrawn 30d", iconName = "circle-minus", iconColor = Color.ORANGE, priority = 93)
-    @Tab("Server")
+    @Tab(SERVER_TAB)
     public long serverWithdrawn30d() {
         return serverSummary(MONTH).withdrawn();
     }

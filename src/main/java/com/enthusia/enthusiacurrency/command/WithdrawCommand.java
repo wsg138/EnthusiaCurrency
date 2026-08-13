@@ -15,6 +15,8 @@ import java.util.OptionalLong;
 
 public class WithdrawCommand implements CommandExecutor, TabCompleter {
 
+    private static final int SINGLE_ARGUMENT = 1;
+
     private final EnthusiaCurrencyPlugin plugin;
 
     public WithdrawCommand(EnthusiaCurrencyPlugin plugin) {
@@ -28,7 +30,7 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        if (args.length != 1) {
+        if (args.length != SINGLE_ARGUMENT) {
             plugin.sendMsg(player, "invalid-amount");
             return true;
         }

@@ -7,6 +7,7 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.BlockStateMeta;
 
+@SuppressWarnings("PMD.NPathComplexity")
 public final class CurrencyUtils {
 
     private CurrencyUtils() {

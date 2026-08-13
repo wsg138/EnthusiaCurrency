@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+@SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
 public final class SqlitePlayerProfileRepository implements PlayerProfileRepository {
 
     private static final String CREATE_TABLE_SQL = """

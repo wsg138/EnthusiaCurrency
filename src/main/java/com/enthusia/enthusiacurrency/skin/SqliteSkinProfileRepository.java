@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+@SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
 final class SqliteSkinProfileRepository implements SkinProfileRepository {
 
     private static final String CREATE_TABLE_SQL = """

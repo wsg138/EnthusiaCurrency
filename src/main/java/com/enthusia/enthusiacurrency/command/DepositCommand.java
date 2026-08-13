@@ -16,6 +16,8 @@ import java.util.OptionalLong;
 
 public class DepositCommand implements CommandExecutor, TabCompleter {
 
+    private static final int SINGLE_ARGUMENT = 1;
+
     private final EnthusiaCurrencyPlugin plugin;
 
     public DepositCommand(EnthusiaCurrencyPlugin plugin) {
@@ -74,7 +76,7 @@ public class DepositCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1 && "all".startsWith(args[0].toLowerCase(Locale.ROOT))) {
+        if (args.length == SINGLE_ARGUMENT && "all".startsWith(args[0].toLowerCase(Locale.ROOT))) {
             return Collections.singletonList("all");
         }
         return Collections.emptyList();

@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+@SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
 public class BaltopTracker {
 
     private static final int REFRESH_BATCH_SIZE = 10;
