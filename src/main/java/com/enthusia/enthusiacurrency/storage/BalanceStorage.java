@@ -137,8 +137,7 @@ public class BalanceStorage {
     public long setBalance(UUID uuid, long amount) {
         CachedBalance updated = balances.compute(uuid, (ignored, current) -> {
             long clampedAmount = Math.max(0L, amount);
-            long nextVersion = current == null ? 1L : current.version() + 1L;
-            return new CachedBalance(clampedAmount, nextVersion);
+            return new CachedBalance(clampedAmount, nextVersion(current));
         });
         markDirty(uuid);
         return updated.amount();
@@ -226,8 +225,7 @@ public class BalanceStorage {
         CachedBalance updated = balances.compute(uuid, (ignored, current) -> {
             long base = current == null ? startingBalance : current.amount();
             long nextAmount = saturatingAdd(base, amount);
-            long nextVersion = current == null ? 1L : current.version() + 1L;
-            return new CachedBalance(nextAmount, nextVersion);
+            return new CachedBalance(nextAmount, nextVersion(current));
         });
         markDirty(uuid);
         return updated.amount();
@@ -244,9 +242,8 @@ public class BalanceStorage {
             if (base < amount) {
                 return current == null ? new CachedBalance(base, 0L) : current;
             }
-            long nextVersion = current == null ? 1L : current.version() + 1L;
             success[0] = true;
-            return new CachedBalance(base - amount, nextVersion);
+            return new CachedBalance(base - amount, nextVersion(current));
         });
 
         if (success[0]) {
@@ -459,6 +456,10 @@ public class BalanceStorage {
             plugin.getLogger().warning("economy.starting-balance contains a decimal value. It will be rounded down to " + normalized.toPlainString() + ".");
         }
         return normalized.longValue();
+    }
+
+    private static long nextVersion(CachedBalance current) {
+        return current == null ? 1L : Math.addExact(current.version(), 1L);
     }
 
     private long saturatingAdd(long current, long delta) {
