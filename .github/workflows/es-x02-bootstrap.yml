@@ -1,0 +1,35 @@
+name: ES-X02 bootstrap
+
+on:
+  push:
+    branches:
+      - package/es-x02-currency-provider
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: package/es-x02-currency-provider
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply deterministic provider wiring
+        run: python tools/es_x02_bootstrap.py
+      - name: Remove one-shot bootstrap files
+        run: |
+          rm tools/es_x02_bootstrap.py
+          rm .github/workflows/es-x02-bootstrap.yml
+      - name: Commit generated package changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "feat: persist and register moderation provider"
+          git push origin HEAD:package/es-x02-currency-provider
