@@ -27,13 +27,13 @@ public final class MovementLockRegistry {
     public boolean acquire(UUID playerId, UUID operationId, Duration duration) {
         Objects.requireNonNull(playerId, PLAYER_ID_ARGUMENT);
         Objects.requireNonNull(operationId, OPERATION_ID_ARGUMENT);
-        long expiresAt = expiry(duration);
-        long now = nowMillis.getAsLong();
+        long durationMillis = leaseMillis(duration);
         AtomicBoolean acquired = new AtomicBoolean();
         leases.compute(playerId, (ignored, existing) -> {
+            long now = nowMillis.getAsLong();
             if (existing == null || existing.expired(now) || existing.operationId().equals(operationId)) {
                 acquired.set(true);
-                return new Lease(operationId, expiresAt);
+                return new Lease(operationId, expiry(now, durationMillis));
             }
             return existing;
         });
@@ -43,10 +43,10 @@ public final class MovementLockRegistry {
     public boolean renew(UUID playerId, UUID operationId, Duration duration) {
         Objects.requireNonNull(playerId, PLAYER_ID_ARGUMENT);
         Objects.requireNonNull(operationId, OPERATION_ID_ARGUMENT);
-        long expiresAt = expiry(duration);
-        long now = nowMillis.getAsLong();
+        long durationMillis = leaseMillis(duration);
         AtomicBoolean renewed = new AtomicBoolean();
         leases.computeIfPresent(playerId, (ignored, existing) -> {
+            long now = nowMillis.getAsLong();
             if (existing.expired(now)) {
                 return null;
             }
@@ -54,7 +54,7 @@ public final class MovementLockRegistry {
                 return existing;
             }
             renewed.set(true);
-            return new Lease(operationId, expiresAt);
+            return new Lease(operationId, expiry(now, durationMillis));
         });
         return renewed.get();
     }
@@ -75,10 +75,9 @@ public final class MovementLockRegistry {
 
     public boolean isLocked(UUID playerId) {
         Objects.requireNonNull(playerId, PLAYER_ID_ARGUMENT);
-        long now = nowMillis.getAsLong();
         AtomicBoolean locked = new AtomicBoolean();
         leases.computeIfPresent(playerId, (ignored, existing) -> {
-            if (existing.expired(now)) {
+            if (existing.expired(nowMillis.getAsLong())) {
                 return null;
             }
             locked.set(true);
@@ -90,10 +89,9 @@ public final class MovementLockRegistry {
     public boolean isOwnedBy(UUID playerId, UUID operationId) {
         Objects.requireNonNull(playerId, PLAYER_ID_ARGUMENT);
         Objects.requireNonNull(operationId, OPERATION_ID_ARGUMENT);
-        long now = nowMillis.getAsLong();
         AtomicBoolean owned = new AtomicBoolean();
         leases.computeIfPresent(playerId, (ignored, existing) -> {
-            if (existing.expired(now)) {
+            if (existing.expired(nowMillis.getAsLong())) {
                 return null;
             }
             owned.set(existing.operationId().equals(operationId));
@@ -106,14 +104,22 @@ public final class MovementLockRegistry {
         leases.clear();
     }
 
-    private long expiry(Duration duration) {
+    private static long leaseMillis(Duration duration) {
         Objects.requireNonNull(duration, "duration");
         if (duration.isZero() || duration.isNegative()) {
             throw new IllegalArgumentException("lease duration must be positive");
         }
-        long millis = duration.toMillis();
         try {
-            return Math.addExact(nowMillis.getAsLong(), millis);
+            long millis = duration.toMillis();
+            return millis == 0L ? 1L : millis;
+        } catch (ArithmeticException ignored) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    private static long expiry(long now, long durationMillis) {
+        try {
+            return Math.addExact(now, durationMillis);
         } catch (ArithmeticException ignored) {
             return Long.MAX_VALUE;
         }
