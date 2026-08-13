@@ -22,6 +22,9 @@ import java.util.concurrent.TimeUnit;
 @SuppressWarnings("PMD.DoNotUseThreads")
 public class BalanceStorage {
 
+    public record BalanceSnapshot(long amount, long revision) {
+    }
+
     private record CachedBalance(long amount, long version) {
     }
 
@@ -46,6 +49,7 @@ public class BalanceStorage {
         this.writerExecutor = Executors.newSingleThreadExecutor(new BalanceWriterThreadFactory());
     }
 
+    @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
     public void load() {
         try {
             Files.createDirectories(plugin.getDataFolder().toPath());
@@ -53,21 +57,32 @@ public class BalanceStorage {
             this.repository = new SqliteBalanceRepository(plugin.getDataFolder().toPath().resolve("balances.db"));
             this.repository.initialize();
 
-            Map<UUID, Long> loadedBalances = repository.loadAllBalances();
+            Map<UUID, BalanceRepository.StoredBalance> loadedBalances = repository.loadAllBalances();
             if (loadedBalances.isEmpty()) {
                 File yamlFile = new File(plugin.getDataFolder(), "balances.yml");
                 Map<UUID, Long> migratedBalances = LegacyYamlBalanceMigration.loadBalances(yamlFile, plugin.getLogger());
                 if (!migratedBalances.isEmpty()) {
-                    repository.saveBalances(migratedBalances);
+                    Map<UUID, BalanceRepository.StoredBalance> migrated = new ConcurrentHashMap<>();
+                    for (Map.Entry<UUID, Long> entry : migratedBalances.entrySet()) {
+                        migrated.put(
+                                entry.getKey(),
+                                new BalanceRepository.StoredBalance(Math.max(0L, entry.getValue()), 0L)
+                        );
+                    }
+                    repository.saveBalances(migrated);
                     LegacyYamlBalanceMigration.markMigrated(yamlFile);
-                    loadedBalances = migratedBalances;
+                    loadedBalances = migrated;
                     plugin.getLogger().info("Migrated " + migratedBalances.size() + " balance(s) from balances.yml to SQLite.");
                 }
             }
 
             balances.clear();
-            for (Map.Entry<UUID, Long> entry : loadedBalances.entrySet()) {
-                balances.put(entry.getKey(), new CachedBalance(Math.max(0L, entry.getValue()), 0L));
+            for (Map.Entry<UUID, BalanceRepository.StoredBalance> entry : loadedBalances.entrySet()) {
+                BalanceRepository.StoredBalance stored = entry.getValue();
+                balances.put(
+                        entry.getKey(),
+                        new CachedBalance(Math.max(0L, stored.amount()), stored.revision())
+                );
             }
 
             reloadSettings();
@@ -94,6 +109,14 @@ public class BalanceStorage {
         return balances.computeIfAbsent(uuid, ignored -> new CachedBalance(startingBalance, 0L)).amount();
     }
 
+    public BalanceSnapshot getBalanceSnapshot(UUID uuid) {
+        CachedBalance current = balances.computeIfAbsent(
+                uuid,
+                ignored -> new CachedBalance(startingBalance, 0L)
+        );
+        return new BalanceSnapshot(current.amount(), current.version());
+    }
+
     public long ensureAccount(UUID uuid) {
         CachedBalance existing = balances.putIfAbsent(uuid, new CachedBalance(startingBalance, 1L));
         if (existing == null) {
@@ -114,11 +137,84 @@ public class BalanceStorage {
     public long setBalance(UUID uuid, long amount) {
         CachedBalance updated = balances.compute(uuid, (ignored, current) -> {
             long clampedAmount = Math.max(0L, amount);
-            long nextVersion = current == null ? 1L : current.version() + 1L;
-            return new CachedBalance(clampedAmount, nextVersion);
+            return new CachedBalance(clampedAmount, nextVersion(current));
         });
         markDirty(uuid);
         return updated.amount();
+    }
+
+    public boolean replaceIfCurrent(
+            UUID uuid,
+            long expectedAmount,
+            long expectedRevision,
+            long replacementAmount,
+            boolean forceRevisionBump
+    ) {
+        validateCasValues(expectedAmount, expectedRevision, replacementAmount);
+        CasOutcome outcome = new CasOutcome();
+        balances.compute(
+                uuid,
+                (ignored, current) -> replaceCachedBalance(
+                        current,
+                        expectedAmount,
+                        expectedRevision,
+                        replacementAmount,
+                        forceRevisionBump,
+                        outcome
+                )
+        );
+        if (outcome.changed) {
+            markDirty(uuid);
+        }
+        return outcome.success;
+    }
+
+    private static void validateCasValues(
+            long expectedAmount,
+            long expectedRevision,
+            long replacementAmount
+    ) {
+        if (expectedAmount < 0L || expectedRevision < 0L || replacementAmount < 0L) {
+            throw new IllegalArgumentException("balance CAS values cannot be negative");
+        }
+    }
+
+    private CachedBalance replaceCachedBalance(
+            CachedBalance current,
+            long expectedAmount,
+            long expectedRevision,
+            long replacementAmount,
+            boolean forceRevisionBump,
+            CasOutcome outcome
+    ) {
+        CachedBalance base = current == null
+                ? new CachedBalance(startingBalance, 0L)
+                : current;
+        if (!matchesExpected(base, expectedAmount, expectedRevision)) {
+            return current;
+        }
+        outcome.success = true;
+        if (!requiresReplacement(base, replacementAmount, forceRevisionBump)) {
+            return base;
+        }
+        outcome.changed = true;
+        return new CachedBalance(replacementAmount, Math.addExact(base.version(), 1L));
+    }
+
+    private static boolean matchesExpected(
+            CachedBalance balance,
+            long expectedAmount,
+            long expectedRevision
+    ) {
+        return balance.amount() == expectedAmount && balance.version() == expectedRevision;
+    }
+
+    private static boolean requiresReplacement(
+            CachedBalance balance,
+            long replacementAmount,
+            boolean forceRevisionBump
+    ) {
+        return forceRevisionBump || balance.amount() != replacementAmount;
     }
 
     public long deposit(UUID uuid, long amount) {
@@ -129,8 +225,7 @@ public class BalanceStorage {
         CachedBalance updated = balances.compute(uuid, (ignored, current) -> {
             long base = current == null ? startingBalance : current.amount();
             long nextAmount = saturatingAdd(base, amount);
-            long nextVersion = current == null ? 1L : current.version() + 1L;
-            return new CachedBalance(nextAmount, nextVersion);
+            return new CachedBalance(nextAmount, nextVersion(current));
         });
         markDirty(uuid);
         return updated.amount();
@@ -147,9 +242,8 @@ public class BalanceStorage {
             if (base < amount) {
                 return current == null ? new CachedBalance(base, 0L) : current;
             }
-            long nextVersion = current == null ? 1L : current.version() + 1L;
             success[0] = true;
-            return new CachedBalance(base - amount, nextVersion);
+            return new CachedBalance(base - amount, nextVersion(current));
         });
 
         if (success[0]) {
@@ -275,10 +369,17 @@ public class BalanceStorage {
         }
     }
 
-    private Map<UUID, Long> balanceValues(Map<UUID, CachedBalance> snapshot) {
-        Map<UUID, Long> toSave = new ConcurrentHashMap<>();
+    @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
+    private Map<UUID, BalanceRepository.StoredBalance> balanceValues(
+            Map<UUID, CachedBalance> snapshot
+    ) {
+        Map<UUID, BalanceRepository.StoredBalance> toSave = new ConcurrentHashMap<>();
         for (Map.Entry<UUID, CachedBalance> entry : snapshot.entrySet()) {
-            toSave.put(entry.getKey(), entry.getValue().amount());
+            CachedBalance value = entry.getValue();
+            toSave.put(
+                    entry.getKey(),
+                    new BalanceRepository.StoredBalance(value.amount(), value.version())
+            );
         }
         return toSave;
     }
@@ -357,6 +458,10 @@ public class BalanceStorage {
         return normalized.longValue();
     }
 
+    private static long nextVersion(CachedBalance current) {
+        return current == null ? 1L : Math.addExact(current.version(), 1L);
+    }
+
     private long saturatingAdd(long current, long delta) {
         if (delta > 0 && Long.MAX_VALUE - current < delta) {
             return Long.MAX_VALUE;
@@ -365,6 +470,11 @@ public class BalanceStorage {
             return Long.MIN_VALUE;
         }
         return current + delta;
+    }
+
+    private static final class CasOutcome {
+        private boolean success;
+        private boolean changed;
     }
 
     private static final class BalanceWriterThreadFactory implements ThreadFactory {

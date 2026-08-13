@@ -6,10 +6,10 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
-import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class SqliteBalanceRepository implements BalanceRepository {
 
@@ -17,6 +17,7 @@ public class SqliteBalanceRepository implements BalanceRepository {
             CREATE TABLE IF NOT EXISTS balances (
                 uuid TEXT PRIMARY KEY,
                 balance INTEGER NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL DEFAULT 0
             )
             """;
@@ -37,27 +38,36 @@ public class SqliteBalanceRepository implements BalanceRepository {
             statement.execute("PRAGMA synchronous=NORMAL");
             statement.execute("PRAGMA busy_timeout=5000");
             statement.execute(CREATE_TABLE_SQL);
+            addRevisionColumnIfMissing(statement);
             addUpdatedAtColumnIfMissing(statement);
         }
     }
 
     @Override
-    public Map<UUID, Long> loadAllBalances() throws Exception {
-        Map<UUID, Long> balances = new HashMap<>();
+    @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
+    public Map<UUID, StoredBalance> loadAllBalances() throws Exception {
+        Map<UUID, StoredBalance> balances = new ConcurrentHashMap<>();
         try (Connection connection = openConnection();
              Statement statement = connection.createStatement();
-             ResultSet resultSet = statement.executeQuery("SELECT uuid, balance FROM balances")) {
+             ResultSet resultSet = statement.executeQuery(
+                     "SELECT uuid, balance, revision FROM balances"
+             )) {
             while (resultSet.next()) {
                 UUID uuid = UUID.fromString(resultSet.getString("uuid"));
-                long balance = resultSet.getLong("balance");
-                balances.put(uuid, balance);
+                balances.put(
+                        uuid,
+                        new StoredBalance(
+                                resultSet.getLong("balance"),
+                                resultSet.getLong("revision")
+                        )
+                );
             }
         }
         return balances;
     }
 
     @Override
-    public void saveBalances(Map<UUID, Long> balances) throws Exception {
+    public void saveBalances(Map<UUID, StoredBalance> balances) throws Exception {
         if (balances.isEmpty()) {
             return;
         }
@@ -65,20 +75,22 @@ public class SqliteBalanceRepository implements BalanceRepository {
         try (Connection connection = openConnection()) {
             connection.setAutoCommit(false);
             try (PreparedStatement statement = connection.prepareStatement(
-                    "INSERT INTO balances(uuid, balance, updated_at) VALUES(?, ?, ?) " +
-                            "ON CONFLICT(uuid) DO UPDATE SET balance = excluded.balance, updated_at = excluded.updated_at")) {
+                    "INSERT INTO balances(uuid, balance, revision, updated_at) VALUES(?, ?, ?, ?) "
+                            + "ON CONFLICT(uuid) DO UPDATE SET "
+                            + "balance = excluded.balance, revision = excluded.revision, "
+                            + "updated_at = excluded.updated_at"
+            )) {
                 long updatedAt = System.currentTimeMillis();
-                for (Map.Entry<UUID, Long> entry : balances.entrySet()) {
+                for (Map.Entry<UUID, StoredBalance> entry : balances.entrySet()) {
                     statement.setString(1, entry.getKey().toString());
-                    statement.setLong(2, entry.getValue());
-                    statement.setLong(3, updatedAt);
+                    statement.setLong(2, entry.getValue().amount());
+                    statement.setLong(3, entry.getValue().revision());
+                    statement.setLong(4, updatedAt);
                     statement.addBatch();
                 }
                 statement.executeBatch();
             }
             connection.commit();
-        } catch (Exception ex) {
-            throw ex;
         }
     }
 
@@ -91,14 +103,30 @@ public class SqliteBalanceRepository implements BalanceRepository {
         return DriverManager.getConnection(jdbcUrl);
     }
 
-    private void addUpdatedAtColumnIfMissing(Statement statement) throws Exception {
+    private static void addRevisionColumnIfMissing(Statement statement) throws Exception {
         try {
-            statement.execute("ALTER TABLE balances ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
-        } catch (Exception ex) {
-            String message = ex.getMessage();
-            if (message == null || !message.toLowerCase(Locale.ROOT).contains("duplicate column")) {
-                throw ex;
-            }
+            statement.execute(
+                    "ALTER TABLE balances ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+            );
+        } catch (Exception exception) {
+            rethrowUnlessDuplicateColumn(exception);
+        }
+    }
+
+    private static void addUpdatedAtColumnIfMissing(Statement statement) throws Exception {
+        try {
+            statement.execute(
+                    "ALTER TABLE balances ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0"
+            );
+        } catch (Exception exception) {
+            rethrowUnlessDuplicateColumn(exception);
+        }
+    }
+
+    private static void rethrowUnlessDuplicateColumn(Exception exception) throws Exception {
+        String message = exception.getMessage();
+        if (message == null || !message.toLowerCase(Locale.ROOT).contains("duplicate column")) {
+            throw exception;
         }
     }
 
