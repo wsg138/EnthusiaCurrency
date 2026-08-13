@@ -1,6 +1,10 @@
 package com.enthusia.enthusiacurrency;
 
 import com.enthusia.enthusiacurrency.command.*;
+import com.enthusia.enthusiacurrency.api.moderation.CurrencyModerationApi;
+import com.enthusia.enthusiacurrency.moderation.CurrencyModerationService;
+import com.enthusia.enthusiacurrency.moderation.CurrencyMovementLockListener;
+import com.enthusia.enthusiacurrency.moderation.MovementLockRegistry;
 import com.enthusia.enthusiacurrency.analytics.CurrencyAnalyticsStorage;
 import com.enthusia.enthusiacurrency.baltop.BaltopTracker;
 import com.enthusia.enthusiacurrency.config.ConfigMigrator;
@@ -39,6 +43,8 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
     private static EnthusiaCurrencyPlugin instance;
 
+    private final MovementLockRegistry moderationLocks = new MovementLockRegistry();
+    private CurrencyModerationService moderationService;
     private BalanceStorage balanceStorage;
     private CurrencyManager currencyManager;
     private CurrencyService currencyService;
@@ -68,6 +74,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         }
 
         this.currencyService = new CurrencyService(this, balanceStorage, currencyManager);
+        setupModerationService();
         startRuntimeServices();
         setupVault();
         registerCommands();
@@ -152,6 +159,7 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         teardownPlaceholderAPI();
+        teardownModerationService();
         stopRuntimeServices();
         closeSkinCache();
         closeStorage();
@@ -195,6 +203,37 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         if (skinCache != null) {
             skinCache.close();
         }
+    }
+
+    private void setupModerationService() {
+        this.moderationService = new CurrencyModerationService(
+                this,
+                balanceStorage,
+                currencyManager,
+                moderationLocks
+        );
+        Bukkit.getServicesManager().register(
+                CurrencyModerationApi.class,
+                moderationService,
+                this,
+                ServicePriority.Normal
+        );
+        Bukkit.getPluginManager().registerEvents(
+                new CurrencyMovementLockListener(moderationLocks),
+                this
+        );
+        getLogger().info(
+                "Registered EnthusiaCurrency moderation API v" + CurrencyModerationApi.API_VERSION + "."
+        );
+    }
+
+    private void teardownModerationService() {
+        if (moderationService == null) {
+            return;
+        }
+        Bukkit.getServicesManager().unregister(CurrencyModerationApi.class, moderationService);
+        moderationService.close();
+        moderationService = null;
     }
 
     private void setupVault() {

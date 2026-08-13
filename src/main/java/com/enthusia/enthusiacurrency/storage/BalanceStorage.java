@@ -22,6 +22,9 @@ import java.util.concurrent.TimeUnit;
 @SuppressWarnings("PMD.DoNotUseThreads")
 public class BalanceStorage {
 
+    public record BalanceSnapshot(long amount, long revision) {
+    }
+
     private record CachedBalance(long amount, long version) {
     }
 
@@ -53,21 +56,32 @@ public class BalanceStorage {
             this.repository = new SqliteBalanceRepository(plugin.getDataFolder().toPath().resolve("balances.db"));
             this.repository.initialize();
 
-            Map<UUID, Long> loadedBalances = repository.loadAllBalances();
+            Map<UUID, BalanceRepository.StoredBalance> loadedBalances = repository.loadAllBalances();
             if (loadedBalances.isEmpty()) {
                 File yamlFile = new File(plugin.getDataFolder(), "balances.yml");
                 Map<UUID, Long> migratedBalances = LegacyYamlBalanceMigration.loadBalances(yamlFile, plugin.getLogger());
                 if (!migratedBalances.isEmpty()) {
-                    repository.saveBalances(migratedBalances);
+                    Map<UUID, BalanceRepository.StoredBalance> migrated = new ConcurrentHashMap<>();
+                    for (Map.Entry<UUID, Long> entry : migratedBalances.entrySet()) {
+                        migrated.put(
+                                entry.getKey(),
+                                new BalanceRepository.StoredBalance(Math.max(0L, entry.getValue()), 0L)
+                        );
+                    }
+                    repository.saveBalances(migrated);
                     LegacyYamlBalanceMigration.markMigrated(yamlFile);
-                    loadedBalances = migratedBalances;
+                    loadedBalances = migrated;
                     plugin.getLogger().info("Migrated " + migratedBalances.size() + " balance(s) from balances.yml to SQLite.");
                 }
             }
 
             balances.clear();
-            for (Map.Entry<UUID, Long> entry : loadedBalances.entrySet()) {
-                balances.put(entry.getKey(), new CachedBalance(Math.max(0L, entry.getValue()), 0L));
+            for (Map.Entry<UUID, BalanceRepository.StoredBalance> entry : loadedBalances.entrySet()) {
+                BalanceRepository.StoredBalance stored = entry.getValue();
+                balances.put(
+                        entry.getKey(),
+                        new CachedBalance(Math.max(0L, stored.amount()), stored.revision())
+                );
             }
 
             reloadSettings();
@@ -92,6 +106,14 @@ public class BalanceStorage {
 
     public long getBalance(UUID uuid) {
         return balances.computeIfAbsent(uuid, ignored -> new CachedBalance(startingBalance, 0L)).amount();
+    }
+
+    public BalanceSnapshot getBalanceSnapshot(UUID uuid) {
+        CachedBalance current = balances.computeIfAbsent(
+                uuid,
+                ignored -> new CachedBalance(startingBalance, 0L)
+        );
+        return new BalanceSnapshot(current.amount(), current.version());
     }
 
     public long ensureAccount(UUID uuid) {
@@ -119,6 +141,38 @@ public class BalanceStorage {
         });
         markDirty(uuid);
         return updated.amount();
+    }
+
+    public boolean replaceIfCurrent(
+            UUID uuid,
+            long expectedAmount,
+            long expectedRevision,
+            long replacementAmount,
+            boolean forceRevisionBump
+    ) {
+        if (expectedAmount < 0L || expectedRevision < 0L || replacementAmount < 0L) {
+            throw new IllegalArgumentException("balance CAS values cannot be negative");
+        }
+        boolean[] success = {false};
+        boolean[] changed = {false};
+        balances.compute(uuid, (ignored, current) -> {
+            CachedBalance base = current == null
+                    ? new CachedBalance(startingBalance, 0L)
+                    : current;
+            if (base.amount() != expectedAmount || base.version() != expectedRevision) {
+                return base;
+            }
+            success[0] = true;
+            if (base.amount() == replacementAmount && !forceRevisionBump) {
+                return base;
+            }
+            changed[0] = true;
+            return new CachedBalance(replacementAmount, Math.addExact(base.version(), 1L));
+        });
+        if (changed[0]) {
+            markDirty(uuid);
+        }
+        return success[0];
     }
 
     public long deposit(UUID uuid, long amount) {
@@ -275,10 +329,16 @@ public class BalanceStorage {
         }
     }
 
-    private Map<UUID, Long> balanceValues(Map<UUID, CachedBalance> snapshot) {
-        Map<UUID, Long> toSave = new ConcurrentHashMap<>();
+    private Map<UUID, BalanceRepository.StoredBalance> balanceValues(
+            Map<UUID, CachedBalance> snapshot
+    ) {
+        Map<UUID, BalanceRepository.StoredBalance> toSave = new ConcurrentHashMap<>();
         for (Map.Entry<UUID, CachedBalance> entry : snapshot.entrySet()) {
-            toSave.put(entry.getKey(), entry.getValue().amount());
+            CachedBalance value = entry.getValue();
+            toSave.put(
+                    entry.getKey(),
+                    new BalanceRepository.StoredBalance(value.amount(), value.version())
+            );
         }
         return toSave;
     }
