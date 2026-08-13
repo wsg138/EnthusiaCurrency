@@ -22,6 +22,7 @@ final class CurrencyInventoryEditor {
         return Math.addExact(count.items(), Math.multiplyExact(count.blocks(), manager.getBlockValue()));
     }
 
+    @SuppressWarnings("PMD.AvoidLiteralsInIfCondition")
     long removeUpTo(ItemStack[] contents, long limit) {
         Count available = count(contents);
         CurrencyRemovalAllocator.Allocation allocation = CurrencyRemovalAllocator.maximum(
@@ -71,6 +72,7 @@ final class CurrencyInventoryEditor {
         return count(box.getInventory().getContents());
     }
 
+    @SuppressWarnings("PMD.CyclomaticComplexity")
     private void remove(ItemStack[] contents, Remaining remaining) {
         for (int index = 0; index < contents.length; index++) {
             if (remaining.done()) {
@@ -109,9 +111,11 @@ final class CurrencyInventoryEditor {
         stack.setItemMeta(meta);
     }
 
+    @SuppressWarnings("PMD.AvoidAssigningNull")
     private static void decrease(ItemStack[] contents, int index, ItemStack stack, int amount) {
         int replacement = stack.getAmount() - amount;
         if (replacement == 0) {
+            // Bukkit uses null entries to represent empty ItemStack array slots.
             contents[index] = null;
         } else {
             stack.setAmount(replacement);
