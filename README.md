@@ -2,6 +2,8 @@
 
 Vault-backed token economy plugin with physical deposits, withdrawals, payments, balance leaderboards, and the supported EnthusiaStaff destructive-currency provider.
 
+For the current **player-facing Enthusia SMP economy**—Raw Gold denominations, bank vs physical balance, `/deposit`, `/withdraw`, `/pay`, `/baltop`, offline payments, and placeholders—see **[`PLAYER_GUIDE.md`](PLAYER_GUIDE.md)**. This README remains the technical/moderation API reference.
+
 ## Build and verification
 
 ```powershell
