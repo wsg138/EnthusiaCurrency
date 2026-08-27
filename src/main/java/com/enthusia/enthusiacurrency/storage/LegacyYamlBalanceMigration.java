@@ -20,7 +20,7 @@ public final class LegacyYamlBalanceMigration {
     }
 
     public static Map<UUID, Long> loadBalances(File yamlFile, Logger logger) {
-        Map<UUID, Long> balances = new HashMap<>();
+        Map<UUID, Long> balances = new HashMap<>(); // NOPMD - Method-local migration accumulator.
         if (!yamlFile.exists()) {
             return balances;
         }
