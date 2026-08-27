@@ -426,7 +426,8 @@ public class CurrencyService {
         int maxStack = currencyManager.getBlockMaterial().getMaxStackSize();
         while (remainingBlocks > 0) {
             int stackSize = (int) Math.min(remainingBlocks, maxStack);
-            Map<Integer, ItemStack> overflow = player.getInventory().addItem(new ItemStack(currencyManager.getBlockMaterial(), stackSize));
+            Map<Integer, ItemStack> overflow = player.getInventory().addItem( // NOPMD - Bukkit-owned local result.
+                    new ItemStack(currencyManager.getBlockMaterial(), stackSize));
             dropOverflow(player, overflow);
             remainingBlocks -= stackSize;
         }
