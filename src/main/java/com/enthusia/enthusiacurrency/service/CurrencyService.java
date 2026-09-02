@@ -11,23 +11,16 @@ import com.enthusia.enthusiacurrency.storage.BalanceStorage;
 import com.enthusia.enthusiacurrency.util.CurrencyManager;
 import com.enthusia.enthusiacurrency.util.CurrencyUtils;
 import org.bukkit.Bukkit;
-import org.bukkit.Material;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.Inventory;
-import org.bukkit.inventory.ItemStack;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.UUID;
 
-@SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
 public class CurrencyService {
 
     private record CachedItemBalance(long amount, long expiresAtNanos) {
-    }
-
-    private record WithdrawalStacks(boolean canUseBlocks, long blocks, long items) {
     }
 
     private record PayDebitResult(boolean success, long senderBalance) {
@@ -57,12 +50,14 @@ public class CurrencyService {
     private final EnthusiaCurrencyPlugin plugin;
     private final BalanceStorage balanceStorage;
     private final CurrencyManager currencyManager;
+    private final CurrencyInventoryWithdrawal inventoryWithdrawal;
     private final Map<UUID, CachedItemBalance> itemBalanceCache = new ConcurrentHashMap<>();
 
     public CurrencyService(EnthusiaCurrencyPlugin plugin, BalanceStorage balanceStorage, CurrencyManager currencyManager) {
         this.plugin = plugin;
         this.balanceStorage = balanceStorage;
         this.currencyManager = currencyManager;
+        this.inventoryWithdrawal = new CurrencyInventoryWithdrawal(currencyManager);
     }
 
     public long getBankBalance(UUID playerId) {
@@ -192,9 +187,9 @@ public class CurrencyService {
             return new WithdrawResult(false, 0L, bankBalance, REASON_INSUFFICIENT);
         }
 
-        WithdrawalStacks stacks = withdrawalStacks(amount);
+        CurrencyInventoryWithdrawal.WithdrawalStacks stacks = inventoryWithdrawal.plan(amount);
 
-        if (!canFitWithdrawal(player.getInventory(), stacks.canUseBlocks(), stacks.blocks(), stacks.items())) {
+        if (!inventoryWithdrawal.canFit(player.getInventory(), stacks)) {
             recordAnalytics(CurrencyAnalyticsAction.WITHDRAW_FAILED, false, player, null, amount, bankBalance, REASON_INVENTORY_FULL);
             return new WithdrawResult(false, 0L, bankBalance, REASON_INVENTORY_FULL);
         }
@@ -204,7 +199,7 @@ public class CurrencyService {
             return new WithdrawResult(false, 0L, getBankBalance(player.getUniqueId()), REASON_INSUFFICIENT);
         }
 
-        addWithdrawalItems(player, stacks);
+        inventoryWithdrawal.deliver(player, stacks);
 
         invalidateItemBalance(player.getUniqueId());
         refreshTrackedItems(player, "withdraw");
@@ -397,53 +392,6 @@ public class CurrencyService {
         }
     }
 
-    private void dropOverflow(Player player, Map<Integer, ItemStack> overflow) {
-        for (ItemStack itemStack : overflow.values()) {
-            player.getWorld().dropItemNaturally(player.getLocation(), itemStack);
-        }
-    }
-
-    private WithdrawalStacks withdrawalStacks(long amount) {
-        int blockValue = currencyManager.getBlockValue();
-        boolean canUseBlocks = currencyManager.hasBlockForm();
-        if (!canUseBlocks || (amount % blockValue != 0 && amount <= 128)) {
-            return new WithdrawalStacks(canUseBlocks, 0L, amount);
-        }
-        return new WithdrawalStacks(true, amount / blockValue, amount % blockValue);
-    }
-
-    private void addWithdrawalItems(Player player, WithdrawalStacks stacks) {
-        if (stacks.canUseBlocks() && stacks.blocks() > 0) {
-            addBlockStacks(player, stacks.blocks());
-        }
-        if (stacks.items() > 0) {
-            addCurrencyItemStacks(player, stacks.items());
-        }
-    }
-
-    private void addBlockStacks(Player player, long blocks) {
-        long remainingBlocks = blocks;
-        int maxStack = currencyManager.getBlockMaterial().getMaxStackSize();
-        while (remainingBlocks > 0) {
-            int stackSize = (int) Math.min(remainingBlocks, maxStack);
-            Map<Integer, ItemStack> overflow = player.getInventory().addItem( // NOPMD - Bukkit-owned local result.
-                    new ItemStack(currencyManager.getBlockMaterial(), stackSize));
-            dropOverflow(player, overflow);
-            remainingBlocks -= stackSize;
-        }
-    }
-
-    private void addCurrencyItemStacks(Player player, long items) {
-        long remainingItems = items;
-        int maxStack = currencyManager.getMaterial().getMaxStackSize();
-        while (remainingItems > 0) {
-            int stackSize = (int) Math.min(remainingItems, maxStack);
-            Map<Integer, ItemStack> overflow = player.getInventory().addItem(currencyManager.createCurrencyItem(stackSize));
-            dropOverflow(player, overflow);
-            remainingItems -= stackSize;
-        }
-    }
-
     private void recordAnalytics(
             CurrencyAnalyticsAction action,
             boolean success,
@@ -494,82 +442,6 @@ public class CurrencyService {
                 balanceAfter,
                 reason
         );
-    }
-
-    private boolean canFitWithdrawal(Inventory inventory, boolean canUseBlocks, long blocks, long items) {
-        ItemStack[] simulated = cloneInventoryContents(inventory.getStorageContents());
-
-        if (canUseBlocks && blocks > 0) {
-            long remainingBlocks = blocks;
-            while (remainingBlocks > 0) {
-                int stackSize = (int) Math.min(remainingBlocks, currencyManager.getBlockMaterial().getMaxStackSize());
-                if (!simulateAddStack(simulated, new ItemStack(currencyManager.getBlockMaterial(), stackSize))) {
-                    return false;
-                }
-                remainingBlocks -= stackSize;
-            }
-        }
-
-        if (items > 0) {
-            long remainingItems = items;
-            while (remainingItems > 0) {
-                int stackSize = (int) Math.min(remainingItems, currencyManager.getMaterial().getMaxStackSize());
-                if (!simulateAddStack(simulated, currencyManager.createCurrencyItem(stackSize))) {
-                    return false;
-                }
-                remainingItems -= stackSize;
-            }
-        }
-
-        return true;
-    }
-
-    private ItemStack[] cloneInventoryContents(ItemStack[] contents) {
-        ItemStack[] cloned = new ItemStack[contents.length];
-        for (int index = 0; index < contents.length; index++) {
-            ItemStack itemStack = contents[index];
-            cloned[index] = itemStack == null ? null : itemStack.clone();
-        }
-        return cloned;
-    }
-
-    private boolean simulateAddStack(ItemStack[] contents, ItemStack incoming) {
-        int remaining = incoming.getAmount();
-
-        for (int index = 0; index < contents.length && remaining > 0; index++) {
-            ItemStack existing = contents[index];
-            if (existing == null || existing.getType() == Material.AIR) {
-                continue;
-            }
-            if (!existing.isSimilar(incoming)) {
-                continue;
-            }
-
-            int maxStack = existing.getMaxStackSize();
-            int space = maxStack - existing.getAmount();
-            if (space <= 0) {
-                continue;
-            }
-
-            int moved = Math.min(space, remaining);
-            existing.setAmount(existing.getAmount() + moved);
-            remaining -= moved;
-        }
-
-        for (int index = 0; index < contents.length && remaining > 0; index++) {
-            ItemStack existing = contents[index];
-            if (existing != null && existing.getType() != Material.AIR) {
-                continue;
-            }
-
-            int moved = Math.min(incoming.getMaxStackSize(), remaining);
-            ItemStack placed = incoming.clone();
-            placed.setAmount(moved);
-            contents[index] = placed;
-            remaining -= moved;
-        }
-
-        return remaining == 0;
     }
 
     private long getCachedItemBalance(Player player) {
