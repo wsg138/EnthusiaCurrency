@@ -1,0 +1,16 @@
+schema_version: 1
+plugin:
+  id: enthusia-currency
+  name: EnthusiaCurrency
+  main_class: com.enthusia.enthusiacurrency.EnthusiaCurrencyPlugin
+artifact:
+  name: sentinel-plugin
+  jar_path: plugin.jar
+profiles:
+  - dependencies
+configs: []
+databases: []
+dependencies:
+  - id: vault
+    kind: hard
+actions: []
