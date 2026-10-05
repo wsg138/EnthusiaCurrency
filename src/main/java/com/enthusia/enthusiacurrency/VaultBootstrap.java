@@ -15,6 +15,10 @@ final class VaultBootstrap {
     private VaultBootstrap() {
     }
 
+    static boolean isAvailable(PluginManager pluginManager) {
+        return pluginManager.isPluginEnabled("Vault");
+    }
+
     static Result register(
             EnthusiaCurrencyPlugin plugin,
             BalanceStorage balanceStorage,
@@ -22,7 +26,7 @@ final class VaultBootstrap {
             PluginManager pluginManager,
             ServicesManager servicesManager
     ) {
-        if (pluginManager.getPlugin("Vault") == null) {
+        if (!isAvailable(pluginManager)) {
             return Result.unavailable();
         }
 
