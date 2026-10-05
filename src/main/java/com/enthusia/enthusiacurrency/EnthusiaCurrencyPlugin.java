@@ -9,7 +9,6 @@ import com.enthusia.enthusiacurrency.skin.SkinCache;
 import com.enthusia.enthusiacurrency.skin.SkinListener;
 import com.enthusia.enthusiacurrency.storage.BalanceStorage;
 import com.enthusia.enthusiacurrency.util.CurrencyManager;
-import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.PluginCommand;
@@ -17,8 +16,6 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
-import org.bukkit.plugin.RegisteredServiceProvider;
-import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.InputStream;
@@ -43,6 +40,12 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
 
         syncConfigWithDefaults();
 
+        if (!VaultBootstrap.isAvailable(Bukkit.getPluginManager())) {
+            getLogger().severe("Vault is unavailable or disabled! Disabling plugin.");
+            Bukkit.getPluginManager().disablePlugin(this);
+            return;
+        }
+
         this.currencyManager = new CurrencyManager(this);
         this.currencyManager.reload();
 
@@ -57,7 +60,9 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         this.skinCache.load();
         Bukkit.getPluginManager().registerEvents(new SkinListener(this.skinCache), this);
 
-        setupVault();
+        if (!setupVault()) {
+            return;
+        }
         registerCommands();
         setupPlaceholderAPI();
         registerListeners();
@@ -79,22 +84,26 @@ public class EnthusiaCurrencyPlugin extends JavaPlugin {
         getLogger().info("EnthusiaCurrency disabled.");
     }
 
-    private void setupVault() {
-        if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
+    private boolean setupVault() {
+        VaultBootstrap.Result result = VaultBootstrap.register(
+                this,
+                balanceStorage,
+                currencyManager,
+                Bukkit.getPluginManager(),
+                Bukkit.getServicesManager());
+        if (!result.available()) {
             getLogger().severe("Vault not found! Disabling plugin.");
             Bukkit.getPluginManager().disablePlugin(this);
-            return;
+            return false;
         }
 
-        this.tokenEconomy = new TokenEconomy(this, balanceStorage, currencyManager);
-        Bukkit.getServicesManager().register(Economy.class, tokenEconomy, this, ServicePriority.Highest);
-
-        RegisteredServiceProvider<Economy> rsp = Bukkit.getServicesManager().getRegistration(Economy.class);
-        if (rsp == null || !(rsp.getProvider() instanceof TokenEconomy)) {
-            getLogger().warning("Another economy provider is registered. Make sure EnthusiaCurrency is the only one.");
-        } else {
+        this.tokenEconomy = result.provider();
+        if (result.ownsRegistration()) {
             getLogger().info("Registered EnthusiaCurrency as Vault economy provider.");
+        } else {
+            getLogger().warning("Another economy provider is registered. Make sure EnthusiaCurrency is the only one.");
         }
+        return true;
     }
 
     private void setupPlaceholderAPI() {
