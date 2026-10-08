@@ -14,7 +14,7 @@ import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ItemBalanceReadPerformanceTest {
+    private static final String PLAYER_NAME = "Synthetic";
     @Test
     void repeatedVaultReadsQueueOneRefreshWithoutCancellation() {
         try (Fixture f = new Fixture()) {
@@ -34,7 +35,7 @@ class ItemBalanceReadPerformanceTest {
             assertEquals(1, f.scheduler.created);
             assertEquals(0, f.scheduler.cancelled);
             assertEquals(1, f.scans);
-            assertTrue(f.tracker.getSnapshot(f.player.getUniqueId(), "Synthetic").dirty());
+            assertTrue(f.tracker.getSnapshot(f.player.getUniqueId(), PLAYER_NAME).dirty());
         }
     }
 
@@ -47,7 +48,7 @@ class ItemBalanceReadPerformanceTest {
             }
             assertEquals(2, f.scans);
             assertEquals(1, f.scheduler.created);
-            assertFalse(f.tracker.getSnapshot(f.player.getUniqueId(), "Synthetic").dirty());
+            assertFalse(f.tracker.getSnapshot(f.player.getUniqueId(), PLAYER_NAME).dirty());
         }
     }
 
@@ -73,6 +74,7 @@ class ItemBalanceReadPerformanceTest {
             f.scheduler.runTo(10);
             f.tracker.markDirty(f.player, "inventory-drag");
             f.scheduler.runTo(40);
+            f.economy.getBalance(f.player); // a read must not extend the inventory-change deadline
             assertEquals(1, f.scans);
             f.scheduler.runTo(50);
             assertEquals(2, f.scans);
@@ -122,7 +124,7 @@ class ItemBalanceReadPerformanceTest {
             assertEquals(2, f.scheduler.created);
             f.configureCurrency();
             f.scheduler.runTo(80);
-            assertFalse(f.tracker.getSnapshot(f.player.getUniqueId(), "Synthetic").dirty());
+            assertFalse(f.tracker.getSnapshot(f.player.getUniqueId(), PLAYER_NAME).dirty());
             assertEquals(0, f.scheduler.cancelled);
         }
     }
@@ -176,7 +178,7 @@ class ItemBalanceReadPerformanceTest {
             Player result = mock(Player.class);
             UUID id = UUID.randomUUID();
             when(result.getUniqueId()).thenReturn(id);
-            when(result.getName()).thenReturn("Synthetic");
+            when(result.getName()).thenReturn(PLAYER_NAME);
             when(result.isOnline()).thenReturn(true);
             when(result.getPlayer()).thenReturn(result);
             bukkit.when(() -> Bukkit.getPlayer(id)).thenReturn(result);
@@ -192,7 +194,7 @@ class ItemBalanceReadPerformanceTest {
     private static final class ControlledScheduler {
         private record Scheduled(long due, Runnable callback) { }
         private final BukkitScheduler api = mock(BukkitScheduler.class);
-        private final Map<Integer, Scheduled> tasks = new HashMap<>();
+        private final Map<Integer, Scheduled> tasks = new ConcurrentHashMap<>();
         private long tick;
         private int created;
         private int cancelled;
